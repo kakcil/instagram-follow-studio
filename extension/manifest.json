@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Follow Studio",
+  "version": "4.2.0",
+  "description": "Instagram JSON ZIP arşivini yerel olarak karşılaştır, hesapları koru ve takip listeni düzenle.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.instagram.com/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Follow Studio’yu aç"},
+  "content_scripts": [{
+    "matches": ["https://www.instagram.com/*"],
+    "js": ["bridge.js", "content.js"],
+    "run_at": "document_end",
+    "all_frames": true
+  }]
+}
