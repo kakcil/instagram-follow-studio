@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+coverage/
+.env
+.env.*
+*.zip
+*.log
+*.png
+*.jpg
+*.jpeg
+*.webp
+exports/
+attachments/
+work/

@@ -1,0 +1,13 @@
+{
+  "name": "instagram-follow-studio",
+  "version": "4.1.1",
+  "private": true,
+  "description": "Local Instagram export comparison and unfollow queue userscript",
+  "license": "MIT",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node --check instagram-follow-studio.user.js"
+  },
+  "devDependencies": { "jsdom": "28.1.0" }
+}
