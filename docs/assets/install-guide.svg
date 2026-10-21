@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="816" viewBox="0 0 1040 816" role="img" aria-labelledby="title desc">
+  <title id="title">Install Follow Studio in three steps</title>
+  <desc id="desc">1. Download the extension ZIP and extract it. 2. Open chrome://extensions or brave://extensions, turn on Developer mode and click Load unpacked. 3. Select the extracted follow-studio folder that contains manifest.json. This is an illustrated guide, not a browser screenshot.</desc>
+  <rect width="1040" height="816" rx="24" fill="#121722"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">
+    <text x="38" y="48" fill="#f3f0ff" font-size="25" font-weight="650">From download to installed</text>
+    <text x="38" y="78" fill="#9ca8bd" font-size="15">Illustrated guide · Your browser may look slightly different</text>
+    <g transform="translate(30 105)">
+      <rect width="980" height="170" rx="18" fill="#1c2231" stroke="#31394d"/>
+      <circle cx="42" cy="40" r="19" fill="#a796ff"/>
+      <text x="42" y="46" text-anchor="middle" fill="#151222" font-size="18" font-weight="700">1</text>
+      <text x="76" y="47" fill="#f3f0ff" font-size="21" font-weight="600">Download → extract</text>
+      <rect x="34" y="76" width="358" height="58" rx="10" fill="#29273e" stroke="#71619c"/>
+      <text x="213" y="111" text-anchor="middle" fill="#dfd7ff" font-size="18">follow-studio-chrome.zip</text>
+      <path d="M423 105 H488 m-11 -10 11 10 -11 10" stroke="#a796ff" stroke-width="3" fill="none"/>
+      <path d="M522 86 h53 l10 10 h100 v48 H522 Z" fill="#a796ff" opacity=".2" stroke="#c2b5ff"/>
+      <text x="706" y="111" fill="#edf0f7" font-size="20">follow-studio</text>
+      <text x="706" y="136" fill="#9ca8bd" font-size="14">Keep this folder on your computer</text>
+    </g>
+    <g transform="translate(30 293)">
+      <rect width="980" height="224" rx="18" fill="#1c2231" stroke="#31394d"/>
+      <circle cx="42" cy="40" r="19" fill="#a796ff"/>
+      <text x="42" y="46" text-anchor="middle" fill="#151222" font-size="18" font-weight="700">2</text>
+      <text x="76" y="47" fill="#f3f0ff" font-size="21" font-weight="600">Open your browser’s extensions page</text>
+      <rect x="34" y="70" width="912" height="43" rx="10" fill="#111722"/>
+      <text x="54" y="97" fill="#d0d7e7" font-size="17" font-family="ui-monospace,Consolas,monospace">chrome://extensions</text>
+      <text x="500" y="97" fill="#9ca8bd" font-size="15">Brave: brave://extensions</text>
+      <rect x="34" y="134" width="176" height="48" rx="24" fill="#c4b5ff"/>
+      <text x="122" y="164" text-anchor="middle" fill="#19142b" font-size="17" font-weight="650">Load unpacked</text>
+      <text x="237" y="164" fill="#9ca8bd" font-size="15">← Click this after turning the switch on</text>
+      <text x="673" y="163" fill="#edf0f7" font-size="17">Developer mode</text>
+      <rect x="858" y="143" width="64" height="32" rx="16" fill="#a796ff"/>
+      <circle cx="906" cy="159" r="12" fill="#fff"/>
+      <text x="873" y="199" fill="#c7bcff" font-size="13" font-weight="600">ON</text>
+    </g>
+    <g transform="translate(30 535)">
+      <rect width="980" height="239" rx="18" fill="#1c2231" stroke="#31394d"/>
+      <circle cx="42" cy="40" r="19" fill="#a796ff"/>
+      <text x="42" y="46" text-anchor="middle" fill="#151222" font-size="18" font-weight="700">3</text>
+      <text x="76" y="47" fill="#f3f0ff" font-size="21" font-weight="600">Select the folder, then reload Instagram</text>
+      <rect x="34" y="73" width="474" height="126" rx="12" fill="#151b28" stroke="#a796ff"/>
+      <text x="56" y="104" fill="#e5dfff" font-size="19" font-weight="600">▸ follow-studio/</text>
+      <text x="85" y="138" fill="#a9e3cd" font-size="17" font-family="ui-monospace,Consolas,monospace">manifest.json</text>
+      <text x="85" y="169" fill="#8592aa" font-size="15">+ three other files</text>
+      <text x="548" y="107" fill="#edf0f7" font-size="18">Choose the folder containing manifest.json.</text>
+      <text x="548" y="139" fill="#9ca8bd" font-size="16">Do not choose the ZIP file itself.</text>
+      <text x="548" y="174" fill="#c7bcff" font-size="16">Then open Instagram → Follow Studio</text>
+      <text x="34" y="222" fill="#8592aa" font-size="14">Tip: if you downloaded the whole repository instead, choose its extension folder.</text>
+    </g>
+  </g>
+</svg>
