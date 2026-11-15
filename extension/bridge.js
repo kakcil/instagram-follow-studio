@@ -1,12 +1,15 @@
 /* Native Chrome storage and messaging; no userscript manager required. */
 globalThis.FollowStudioBridge = {
   async connect() {
-    let snapshot = await chrome.storage.local.get(null);
+    const keys = new Set(['local-unfollow-job', 'follow-studio-cache', 'follow-studio-protected',
+      'follow-studio-frozen', 'follow-studio-run-summary', 'follow-studio-mode', 'follow-studio-order']);
+    const snapshot = await chrome.storage.local.get([...keys]);
     let writes = Promise.resolve();
     let writeError = null;
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
       for (const [key, change] of Object.entries(changes)) {
+        if (!keys.has(key)) continue;
         if ('newValue' in change) snapshot[key] = structuredClone(change.newValue);
         else delete snapshot[key];
       }
@@ -25,7 +28,8 @@ globalThis.FollowStudioBridge = {
     };
     chrome.runtime.onMessage.addListener(message => {
       if (message.type === 'studio-open') {
-        document.querySelector('#ig-follow-manager')?.shadowRoot?.querySelector('[data-open]')?.click();
+        const panel = document.querySelector('#ig-follow-manager')?.shadowRoot;
+        if (panel?.querySelector('[data-veil]').hidden) panel.querySelector('[data-open]').click();
       }
     });
     return {

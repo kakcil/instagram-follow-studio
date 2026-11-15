@@ -1,13 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
-let source = fs.readFileSync(path.join(root, 'instagram-follow-studio.user.js'), 'utf8');
+const version = JSON.parse(fs.readFileSync(path.join(root, 'extension/manifest.json'), 'utf8')).version;
+let source = fs.readFileSync(path.join(root, 'instagram-follow-studio.user.js'), 'utf8').replace(/\r\n/g, '\n');
 source = source.slice(source.indexOf('(async () => {'));
 const replace = (before, after) => {
   if (!source.includes(before)) throw new Error('Shared source changed: ' + before.slice(0, 70));
   source = source.replace(before, after);
 };
-replace("  'use strict';", "  'use strict';\n  const bridge = await FollowStudioBridge.connect();\n  const {getValue: storageGet, setValue: storageSet, deleteValue: storageDelete} = bridge;");
+replace("  'use strict';", "  'use strict';\n  const scanId = new URL(location.href).searchParams.get('follow_studio_scan');\n  if (scanId) { if (window.top === window.self) await FollowStudioRelationships.work(scanId); return; }\n  if (window.top === window.self) {\n    const scan = await chrome.runtime.sendMessage({type: 'relationships-resume'});\n    if (scan?.ok && scan.id) { await FollowStudioRelationships.work(scan.id); return; }\n  }\n  const followId = new URL(location.href).searchParams.get('follow_studio_job');\n  if (followId) { if (window.top === window.self) await FollowStudioQueue.work(followId); return; }\n  if (window.top !== window.self && !new URL(location.href).searchParams.has('local_unfollow_job')) return;\n  const bridge = await FollowStudioBridge.connect();\n  const {getValue: storageGet, setValue: storageSet, deleteValue: storageDelete} = bridge;");
 source = source.replaceAll('GM_getValue', 'storageGet').replaceAll('GM_setValue', 'storageSet').replaceAll('GM_deleteValue', 'storageDelete');
 
 const workerStart = source.indexOf('    const active = () => {');
@@ -35,7 +36,52 @@ replace('    } finally { closeWorker(); }', '    } finally { await closeWorker()
 replace("    if (runList === 'queue') {", "    try {\n      if (!await bridge.claim()) { report('Başka bir Instagram sekmesinde işlem sürüyor. Önce oradaki işlemi durdur.'); return; }\n    } catch (error) { report(error.message); return; }\n    if (runList === 'queue') {");
 replace("lockControls(); report('Çalışma sona erdi.');", "lockControls(); try { await bridge.release(); } catch (error) { report(error.message); } report('Çalışma sona erdi.');");
 replace("panel.querySelector('[data-open]').onclick = () => { veil.hidden = false; refreshLists(false);", "panel.querySelector('[data-open]').onclick = () => { if (!running && !loading) { listData = storageGet('follow-studio-cache', null); runSummary = storageGet('follow-studio-run-summary', null); excluded = new Set(listData && listData.excluded || []); } veil.hidden = false; refreshLists();");
-replace('\n})();', `\n  if (await bridge.ready()) panel.querySelector('[data-open]').click();
+source = source.replaceAll("querySelector('input[type=number]')", "querySelector('#wait-seconds')")
+  .replaceAll("querySelector('textarea')", "querySelector('[data-manual] textarea')");
+const syncUnfollowInput = source.match(/^    if \(syncQueue && listData && !running\) .*$/m)[0];
+replace(syncUnfollowInput + '\n', '');
+replace("    const area = panel.querySelector('[data-results]');", syncUnfollowInput + "\n    const area = panel.querySelector('[data-results]');");
+replace('    area.replaceChildren();', "    area.replaceChildren();\n    if (!area.closest('[data-studio-view=unfollow]:not([hidden])') || area.closest('[data-veil]').hidden) return;");
+replace('role="dialog" aria-modal="true"', 'role="region"');
+replace('aria-label="Modalı kapat"', 'aria-label="Paneli kapat"');
+replace('<div class="brand-icon" aria-hidden="true">✦</div><div><h1 id="studio-title">Follow Studio</h1><p class="subtitle">Takip listeni düzenle. Sevdiklerini koru.</p></div>', `<h1 id="studio-title">Follow Studio <small data-studio-version style="font-size:12px;font-weight:400;color:#aaa">v${version}</small></h1>`);
+replace('veil.hidden = true; panel.querySelector', "veil.hidden = true; veil.dispatchEvent(new Event('studio-visibility')); panel.querySelector");
+replace('veil.hidden = false; refreshLists(); panel.querySelector', "veil.hidden = false; veil.dispatchEvent(new Event('studio-visibility')); refreshLists(); panel.querySelector");
+replace("[data-open]').onclick = () => { if (!running", "[data-open]').onclick = () => { if (!veil.hidden) { closeModal(); return; } if (!running");
+source = source.replace(/  veil\.onclick = [^\n]+\n/, '').replace(/    if \(event.key !== 'Tab'\) return;[\s\S]*?(?=\n  \}\);)/, '');
+replace('\n})();', `\n  async function readRelationshipArchive(file) {
+    const zip = await readInstagramZip(file);
+    const files = Object.keys(zip.files);
+    const followerFiles = files.filter(name => /(^|\\/)followers(_\\d+)?\\.json$/.test(name));
+    const followingFiles = files.filter(name => /(^|\\/)following\\.json$/.test(name));
+    if (!followerFiles.length || followingFiles.length !== 1) {
+      throw new Error('ZIP içinde followers JSON dosyaları ve tek bir following.json bulunmalı.');
+    }
+    const parts = followerFiles.map(name => Number(name.match(/followers_(\\d+)\\.json$/)?.[1] || 0)).sort((a,b) => a-b);
+    if ((parts.includes(0) && parts.length !== 1) ||
+        (!parts.includes(0) && parts.some((part,index) => part !== index + 1))) {
+      throw new Error('Takipçi dosyalarının parçaları eksik veya birden fazla hesap karışmış.');
+    }
+    async function namesFrom(paths, property) {
+      const names = new Set();
+      for (const path of paths) {
+        const data = JSON.parse(await zip.files[path].async('string'));
+        const rows = Array.isArray(data) ? data : data[property];
+        if (!Array.isArray(rows)) throw new Error('Arşivde beklenmeyen JSON yapısı.');
+        for (const row of rows) {
+          const item = row.string_list_data?.[0];
+          const value = item?.value || row.title || item?.href;
+          if (typeof value !== 'string' || !value.trim()) throw new Error('Arşivde geçersiz kullanıcı kaydı.');
+          names.add(parseName(value));
+        }
+      }
+      return [...names];
+    }
+    return {followers: await namesFrom(followerFiles, 'relationships_followers'),
+      following: await namesFrom(followingFiles, 'relationships_following')};
+  }
+  FollowStudioQueue.attach(panel, refreshLists, readRelationshipArchive);
+  if (await bridge.ready()) panel.querySelector('[data-open]').click();
 })().catch(error => {
   console.error('Follow Studio:', error.message);
   const host = document.querySelector('#ig-follow-manager');
@@ -45,7 +91,7 @@ replace('\n})();', `\n  if (await bridge.ready()) panel.querySelector('[data-ope
 source = '// Generated by scripts/build-extension.cjs. Edit shared source or build adapter.\n' + source;
 const target = path.join(root, 'extension/content.js');
 if (process.argv.includes('--check')) {
-  if (!fs.existsSync(target) || fs.readFileSync(target, 'utf8') !== source) throw new Error('Run npm run build');
+  if (!fs.existsSync(target) || fs.readFileSync(target, 'utf8').replace(/\r\n/g, '\n') !== source) throw new Error('Run npm run build');
   console.log('Extension generated source is up to date.');
 } else {
   fs.writeFileSync(target, source);

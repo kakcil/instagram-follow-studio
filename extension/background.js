@@ -4,6 +4,8 @@ const jobKey = 'local-unfollow-job';
 const sessionKey = 'follow-studio-session';
 const newSession = () => ({owner: null, workers: {}, pendingOpen: {}});
 let operations = Promise.resolve();
+importScripts('follow-queue.js');
+importScripts('relationships.js');
 
 function instagram(url) {
   try { return new URL(url).origin === 'https://www.instagram.com'; } catch { return false; }
@@ -16,6 +18,8 @@ async function handle(message, sender) {
   if (sender.id !== chrome.runtime.id || !sender.tab || !instagram(sender.url)) throw new Error('Geçersiz eklenti isteği.');
   const tabId = sender.tab.id;
   const state = await session();
+  if (message.type.startsWith('relationships-')) return handleRelationships(message, sender, state);
+  if (message.type.startsWith('follow-')) return handleFollow(message, sender, state);
   if (message.type === 'studio-ready') {
     const open = Boolean(state.pendingOpen[tabId]);
     delete state.pendingOpen[tabId]; await save(state);
@@ -24,6 +28,8 @@ async function handle(message, sender) {
   if (message.type === 'studio-claim') {
     if (sender.frameId !== 0) throw new Error('İşlem ana sekmeden başlatılmalı.');
     if (state.owner !== null && await alive(state.owner)) return {claimed: false};
+    if ((await relationshipJob())?.running) throw new Error('Önce takipleşme taramasını durdur.');
+    if ((await readFollowQueue()).running) throw new Error('Takip kuyruğunu önce durdur.');
     state.owner = tabId; await save(state);
     return {claimed: true};
   }
@@ -111,3 +117,19 @@ chrome.tabs.onRemoved.addListener(tabId => cleanup(tabId));
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') cleanup(tabId, true);
 });
+
+// Keep the computer awake throughout a running queue, including scheduled breaks.
+// Reconcile durable state whenever the MV3 worker starts, since it can be suspended
+// between alarms. Serialize changes so a late start cannot override a stop.
+let powerUpdates = Promise.resolve();
+function refreshFollowPower() {
+  powerUpdates = powerUpdates.then(async () => {
+    const state = await readFollowQueue();
+    if (state.running) chrome.power.requestKeepAwake('system');
+    else chrome.power.releaseKeepAwake();
+  }).catch(error => console.error('Follow Studio güç yönetimi:', error.message));
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && Object.prototype.hasOwnProperty.call(changes, 'follow-studio-follow-queue')) refreshFollowPower();
+});
+refreshFollowPower();
