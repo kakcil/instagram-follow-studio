@@ -15,12 +15,22 @@
   <a href="#need-help">Need help?</a>
 </p>
 
-Follow Studio compares the accounts you follow with the followers listed in your Instagram data download. You can review the results, protect accounts you want to keep, and start an unfollow queue when you are ready.
+Follow Studio **v4.2.2** brings three tools into a compact, dark panel on Instagram: a follow queue, an archive-based unfollow list, and dated follower / mutual-follow comparisons. Each tool has its own tab and saved state.
 
 **For desktop Chrome and Brave.** The app's buttons are currently in Turkish; this guide explains them in English. You do not need Violentmonkey for the browser extension.
 
 > [!IMPORTANT]
-> Results describe **the data in your Instagram ZIP**, not a live check of who follows you now. An incomplete or outdated export can produce incorrect candidates. Download **all-time** data and review the list before starting.
+> The **unfollow list** describes the data in your Instagram ZIP, not a live check of who follows you now. An incomplete or outdated export can produce incorrect candidates. Download **all-time** data and review the list before starting.
+
+## Three tools, one panel
+
+| Tab in the app | Use it to | Start here |
+| --- | --- | --- |
+| **Toplu takip** | Build and run a follow queue | [Follow queue](#build-a-follow-queue) |
+| **Takipten çık** | Review an Instagram export and unfollow selected candidates | [Unfollow list](#open-your-list-and-review-it) |
+| **Takipleşme** | Compare dated snapshots of followers and following | [Relationship history](#track-follower-and-mutual-follow-changes) |
+
+The panel opens on **Toplu takip**. Switching tabs shows only the selected tool. List transfer, timing, history, and logs sit in expandable sections.
 
 ## Install Follow Studio
 
@@ -59,6 +69,10 @@ Click **Load unpacked**, then select the extracted **follow-studio** folder.
    ├── manifest.json
    ├── background.js
    ├── bridge.js
+   ├── follow-queue.js
+   ├── follow-content.js
+   ├── relationships.js
+   ├── relationships-content.js
    └── content.js
 ```
 
@@ -68,7 +82,7 @@ A **Follow Studio** card should appear on the extensions page. Make sure its on/
 
 Open **[www.instagram.com](https://www.instagram.com/)** and sign in normally. If Instagram was already open, **reload the page**.
 
-Click **✦ Follow Studio** in the bottom-right corner. The panel stays closed until you open it. You can also open it from the browser's extensions menu while Instagram is open.
+Click the **four-square Follow Studio tools icon** in the bottom-right corner. The panel stays closed until you open it; click the icon again or use **×** to close it. A nearby person-plus icon adds the currently opened profile to the follow queue without opening the panel. You can also open the panel from the browser's extensions menu while Instagram is open.
 
 > [!TIP]
 > Already using the old Violentmonkey version? Turn that script **off** first. Its saved lists and protected accounts do not move into the standalone extension automatically. Import your ZIP again and protect the accounts you want to keep before starting.
@@ -98,15 +112,31 @@ To request the second file:
 
 Keep the Instagram ZIP private. You do not need to send it to us or upload it to GitHub.
 
+## Build a follow queue
+
+<p align="center">
+  <img src="docs/assets/panel-follow.png" alt="Follow Studio v4.2.2: Toplu takip tab with an empty queue, Start and Stop, expanded list transfer controls, timing and follow history." width="540">
+</p>
+
+1. Open a profile on Instagram and use the **person-plus icon** beside the panel launcher to add it to the queue. This does not start following immediately.
+2. Or open **Toplu takip → Liste ekle ve taşı**, paste one username per line, and click **Listeyi kuyruğa ekle**. Duplicates and names already recorded in follow history are skipped; profiles awaiting review stay in their separate unverified list.
+3. Expand **Zamanlama** to choose the interval range in **minutes**, group size, extra group rest, and session limit. Defaults are **5–5 minutes**, **5 profiles per group**, a **30-minute group rest**, and **10 profiles per session**. These settings do not guarantee freedom from Instagram restrictions.
+4. Click **Başlat**. The queue uses inactive worker tabs and verifies the profile state after reloading before recording a follow or request. The machine is kept awake while this queue runs.
+5. Use **Durdur** to stop. Reaching the session limit keeps the remaining queue and requires a manual restart. Account changes or logout stop processing; resume with the original Instagram account.
+
+**Kalanları kopyala** pauses the queue and copies its remaining usernames. On another computer, sign in to the same Instagram account, paste them into the list field (or use **Panodan yapıştır**), then add them to the queue. If clipboard access fails, select and copy / paste the text manually. This transfers the remaining list, not saved history or settings.
+
+**Takip geçmişi** lists confirmed outcomes. Missing or unavailable profiles can be skipped while the queue continues; **Doğrulanamayan profiller** retains their details for review and manual requeue. Verification failures and Instagram restrictions stop the queue. **Hata günlüğü** retains failure details; requeueing does not erase previous attempts.
+
 ## Open your list and review it
 
 <p align="center">
-  <img src="docs/assets/panel.png" alt="The actual Follow Studio panel before importing any data. It shows the ZIP picker, Unfollow, Protected and Unavailable tabs, sorting, a five-second delay, and Start and Stop controls. The interface labels are in Turkish." width="680">
+  <img src="docs/assets/panel.png" alt="Follow Studio v4.2.2: Takipten çık tab with archive picker, counts, protected and unavailable sections, sorting, and Start and Stop in the footer." width="540">
 </p>
 
-<p align="center"><em>The actual panel, shown with no imported data or account names.</em></p>
+<p align="center"><em>Current extension UI rendered locally with mocked browser APIs, no imported data, and no real account names. All three panel images use this same setup.</em></p>
 
-1. Click **Instagram ZIP dosyanı seç** — this means **Choose your Instagram ZIP**.
+1. Select the **Takipten çık** tab, then click **Instagram ZIP dosyanı seç** — this means **Choose your Instagram ZIP**.
 2. Select the **personal ZIP downloaded from Instagram**, not the extension ZIP.
 3. Wait for the list to appear. These are accounts listed under **following** but missing from **followers** in that export.
 4. Use **Hide** on any account you want to keep following. It moves into the protected section.
@@ -130,6 +160,8 @@ Keep the Instagram ZIP private. You do not need to send it to us or upload it to
 
 ## Start when you are ready
 
+Expand **İşlem ayarları ve günlük** in the **Takipten çık** tab to see the unfollow settings and activity log. These settings are separate from the follow queue’s minute-based timing.
+
 - **İşlemler arası bekleme** means **wait between accounts**. The default is **5 seconds**. Page loading and processing take additional time; the estimate updates after the first result.
 - **İşlem yöntemi** means **processing method**. The default iframe option tries a hidden page first. If it cannot connect, the extension switches to background tabs. Those tabs close after processing.
 - Click **Başlat** to start. The counters change to **unfollowed**, **failed/skipped**, and **remaining**.
@@ -138,15 +170,32 @@ Keep the Instagram ZIP private. You do not need to send it to us or upload it to
 
 Your list is saved on this computer. You can reopen the panel later without choosing the same ZIP again. **Importing a new ZIP replaces the main list and the last run's results; protected and unavailable accounts are kept.**
 
+## Track follower and mutual-follow changes
+
+<p align="center">
+  <img src="docs/assets/panel-relationships.png" alt="Follow Studio v4.2.2: Takipleşme tab with username, first snapshot controls, archive import, change filters and check dates." width="540">
+</p>
+
+Open **Takipleşme** and enter your own Instagram username. Choose either way to create a snapshot:
+
+- **Live scan:** open your own profile and click **İlk kaydı oluştur**. Follow Studio reads the complete followers and following lists. Later, **Değişiklikleri kontrol et** compares the new complete scan with the previous snapshot. Partial lists, ambiguous counts, and another account's profile are rejected instead of replacing the baseline.
+- **Instagram archive:** expand **Instagram JSON arşivinden kayıt al**. Choose an all-time JSON ZIP containing both complete lists, enter the archive's preparation date, confirm it belongs to your account, then click **Arşivi kaydet ve karşılaştır**. Later archives must have a newer date. This import is separate from the unfollow list.
+
+The first snapshot establishes a baseline; it cannot reconstruct earlier changes. Subsequent snapshots record names missing from the followers or following list. Filter with **Tüm değişiklikler** (all changes), **Takipçi listenden çıkanlar** (lost followers), or **Biten takipleşmeler** (ended mutual follows). Expand **Kontrol tarihleri** to review snapshot dates.
+
+Dates describe the interval **between two snapshots**, not the exact time or reason a relationship changed. Blocking, account closure, and incomplete source data can affect what appears in a list.
+
 ## Need help?
 
 | What you see | What to try |
 | --- | --- |
 | **“Manifest file is missing”** during installation | The wrong folder was selected. Open the extracted folders until you see `manifest.json`, then select the folder containing it. If you downloaded the entire GitHub repository instead, select its **extension** folder. |
 | **No Load unpacked button** | Turn on **Developer mode** on the browser's extensions page. |
-| **No Follow Studio button on Instagram** | Check that the extension is enabled, open **www.instagram.com**, and reload the page. |
+| **No Follow Studio tools icon on Instagram** | Check that the extension is enabled, open **www.instagram.com**, and reload the page. |
 | **The ZIP will not load / JSON files not found** | Choose your **Instagram data ZIP**, not the extension ZIP. Request the export in **JSON**, with both followers and following included. |
 | **Someone who follows me appears in the list** | The archive may be outdated or incomplete. Stop, review the account on Instagram, and request a fresh **All time** export. The extension cannot confirm live follower status. |
+| **The follow queue stopped at its session limit** | Remaining profiles are saved. Review the queue and restart manually; it does not automatically continue after this limit. |
+| **Relationship history shows no changes** | The first snapshot is only a baseline. Create a later complete scan or import a newer complete archive for comparison. |
 | **The main list is empty** | There may be no unmatched accounts in that ZIP, or the candidates may already be protected, removed, processed, or in the unavailable section. |
 | **My old protected accounts are missing after switching from Monkey** | The two versions have separate storage. Protect those accounts again before starting in the extension. |
 | **I want to clear the current list** | Click **Liste hafızasını sıfırla**. It clears the main list and run summary, while keeping protected and unavailable accounts. |
@@ -170,11 +219,11 @@ Avoid removing and reinstalling the extension when updating: removal can delete 
 | Data | Where it goes |
 | --- | --- |
 | Your Instagram ZIP | Read locally in your browser; not sent to a Follow Studio server |
-| Parsed lists, ZIP filename, protected/unavailable accounts, and run summary | Saved in the extension's local storage; not Chrome Sync |
-| Unfollow actions | Sent to Instagram through your existing signed-in session |
+| Parsed lists, ZIP filename, protected/unavailable accounts, follow queue, settings, outcomes, logs, and dated relationship snapshots | Saved in the extension's local storage; not Chrome Sync |
+| Follow and unfollow actions, and live list scans | Use Instagram through your existing signed-in session |
 | Optional photo links | Open the linked image address only when you click them |
 
-Follow Studio has no analytics server, AI service, or API key requirement. It requests access to **www.instagram.com** and **local storage**. The repository and guide contain no personal exports or real Instagram account lists. To remove all saved extension data, uninstall the extension.
+Follow Studio has no analytics server, AI service, or API key requirement. It requests **www.instagram.com** access plus **storage**, **alarms** (queue scheduling), **cookies** (the Instagram account ID used to bind work to the signed-in account), and **power** (keeping the system awake during the follow queue). It does not need your password. The repository and guide contain no personal exports or real Instagram account lists. To remove all saved extension data, uninstall the extension.
 
 Follow Studio is independent of Instagram and Meta. It uses visible page controls, so changes to Instagram's interface can affect it.
 
@@ -200,9 +249,9 @@ npm run check
 npm run package
 ```
 
-The shared UI and export parser are in `instagram-follow-studio.user.js`. The build adapter generates `extension/content.js`; edit the source or adapter rather than that generated file. `extension/background.js` manages worker ownership and rechecks archive eligibility and protection before clicks.
+The shared UI and export parser are in `instagram-follow-studio.user.js`. The build adapter generates `extension/content.js`; edit the source or adapter rather than that generated file. `extension/background.js` manages worker ownership and rechecks archive eligibility and protection before unfollow clicks. `follow-queue.js` and `follow-content.js` manage the account-bound follow queue and panel tabs; `relationships.js` and `relationships-content.js` manage dated snapshots, live scans, and comparisons.
 
-Tests use synthetic data and mocked browser APIs. They do not connect to real Instagram accounts or perform live unfollows. The package command includes only the four extension files in `dist/follow-studio-chrome.zip`.
+Tests use synthetic data and mocked browser APIs. They do not connect to real Instagram accounts or perform live follows or unfollows. The package command includes only the eight extension files in `dist/follow-studio-chrome.zip`.
 
 </details>
 
