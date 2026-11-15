@@ -1,6 +1,7 @@
 'use strict';
 
 globalThis.FollowStudioRelationships = (() => {
+  const {text: localize, locale} = FollowStudioI18n;
   const stateKey = 'follow-studio-relationships';
   const jobKey = 'follow-studio-relationship-job';
   const normalize = text => (text || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/i\u0307/g, 'i');
@@ -77,6 +78,17 @@ globalThis.FollowStudioRelationships = (() => {
     return [...scope.querySelectorAll('a[href]')].filter(link => visible(link) && usernameFromLink(link) &&
       (!suggestion || Boolean(link.compareDocumentPosition(suggestion) & Node.DOCUMENT_POSITION_FOLLOWING)));
   }
+  function profilePhoto(link, scope, username) {
+    for (let row = link; row && row !== scope; row = row.parentElement) {
+      if ([...row.querySelectorAll('a[href]')].some(anchor => {
+        const name = usernameFromLink(anchor);
+        return name && name !== username;
+      })) return;
+      const images = row.querySelectorAll('img[src]');
+      if (images.length === 1) return images[0].currentSrc || images[0].src;
+      if (images.length > 1) return;
+    }
+  }
   function scrollContainer(scope) {
     return [scope, ...scope.querySelectorAll('div,ul,[role="list"]')].filter(el =>
       el.scrollHeight > el.clientHeight + 3 && el.clientHeight > 0 &&
@@ -93,7 +105,7 @@ globalThis.FollowStudioRelationships = (() => {
     }
     fail('page');
   }
-  async function scanList(username, kind, expected, id) {
+  async function scanList(username, kind, expected, id, photos) {
     if (expected === 0) return [];
     const link = listLink(username, kind);
     if (!link) fail('page');
@@ -108,7 +120,14 @@ globalThis.FollowStudioRelationships = (() => {
       const scope = dialog();
       if (!scope) fail('page');
       const before = seen.size;
-      for (const row of profileLinks(scope)) seen.add(usernameFromLink(row));
+      for (const row of profileLinks(scope)) {
+        const name = usernameFromLink(row);
+        seen.add(name);
+        if (!photos.has(name)) {
+          const photo = profilePhoto(row, scope, name);
+          if (photo) photos.set(name, photo);
+        }
+      }
       if (seen.size > expected) fail('counts_changed');
       await send('relationships-progress', {id, list: kind, seen: seen.size, total: expected});
       if (seen.size === expected) return [...seen];
@@ -152,16 +171,17 @@ globalThis.FollowStudioRelationships = (() => {
       await send('relationships-check', {id});
       if (counts.followers !== exactCount(listLink(username, 'followers')) ||
           counts.following !== exactCount(listLink(username, 'following'))) fail('counts_changed');
-      const followers = await scanList(username, 'followers', counts.followers, id);
+      const photos = new Map();
+      const followers = await scanList(username, 'followers', counts.followers, id, photos);
       if (counts.followers) await closeDialog(id);
-      const following = await scanList(username, 'following', counts.following, id);
+      const following = await scanList(username, 'following', counts.following, id, photos);
       if (counts.following) await closeDialog(id);
       await sleep(1500);
       await send('relationships-check', {id});
       if (!ownProfile(username)) fail('not_owner');
       if (counts.followers !== exactCount(listLink(username, 'followers')) ||
           counts.following !== exactCount(listLink(username, 'following'))) fail('counts_changed');
-      await send('relationships-result', {id, counts, followers, following, ownerConfirmed: true});
+      await send('relationships-result', {id, counts, followers, following, photos: Object.fromEntries(photos), ownerConfirmed: true});
     } catch (error) {
       try { await send('relationships-error', {id, code: error.code || 'page'}); } catch {}
     }
@@ -211,7 +231,7 @@ globalThis.FollowStudioRelationships = (() => {
     const input = form.elements.username;
     const importForm = find('[data-relationship-import]');
     const status = find('[data-relationship-status]');
-    const date = time => new Date(time).toLocaleString('tr-TR');
+    const date = time => new Date(time).toLocaleString(locale());
     let revision = 0;
     let saved;
     let account;
@@ -227,16 +247,16 @@ globalThis.FollowStudioRelationships = (() => {
         link.href = 'https://www.instagram.com/' + event.name + '/';
         link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = '@' + event.name;
         const text = document.createElement('small');
-        text.textContent = event.type === 'lost_follower' ?
+        text.textContent = localize(event.type === 'lost_follower' ?
           (event.wasMutual ? 'Takipleşiyordunuz. Artık takipçi listende görünmüyor.' : 'Artık takipçi listende görünmüyor.') :
-          'Takipleşiyordunuz. Artık takip ettiklerin listesinde görünmüyor.';
+          'Takipleşiyordunuz. Artık takip ettiklerin listesinde görünmüyor.');
         const interval = document.createElement('small');
-        interval.textContent = 'Önceki kontrol ' + date(event.from) + ' · Değişimin görüldüğü kontrol ' + date(event.to);
+        interval.textContent = localize('Önceki kontrol ' + date(event.from) + ' · Değişimin görüldüğü kontrol ' + date(event.to));
         row.append(link, text, interval); return row;
       });
       if (!rows.length) {
         const empty = document.createElement('li');
-        empty.textContent = saved ? 'Bu filtrede kaydedilmiş değişiklik yok.' : 'İlk kaydını oluştur. Bir sonraki kontrol değişiklikleri gösterecek.';
+        empty.textContent = localize(saved ? 'Bu filtrede kaydedilmiş değişiklik yok.' : 'İlk kaydını oluştur. Bir sonraki kontrol değişiklikleri gösterecek.');
         rows.push(empty);
       }
       find('[data-relationship-events]').replaceChildren(...rows);
@@ -247,8 +267,8 @@ globalThis.FollowStudioRelationships = (() => {
       input.disabled = Boolean(job?.running);
       for (const control of importForm.elements) control.disabled = Boolean(job?.running);
       find('[data-relationship-stop]').disabled = !job?.running;
-      find('[data-relationship-start]').textContent = saved ? 'Değişiklikleri kontrol et' : 'İlk kaydı oluştur';
-      status.textContent = (job?.status || 'Hazır') + (job?.running && job.total != null ? ' ' + job.seen + ' / ' + job.total : '');
+      find('[data-relationship-start]').textContent = localize(saved ? 'Değişiklikleri kontrol et' : 'İlk kaydı oluştur');
+      status.textContent = localize(job?.status || 'Hazır') + (job?.running && job.total != null ? ' ' + job.seen + ' / ' + job.total : '');
     }
     async function refresh() {
       const current = ++revision;
@@ -261,15 +281,17 @@ globalThis.FollowStudioRelationships = (() => {
         if (!input.value) input.value = saved?.username || guessUsername();
         account = response.account;
         renderJob(job);
-        find('[data-relationship-summary]').textContent = saved ? (saved.latest.source === 'archive' ? 'Arşiv tarihi ' : 'Son kayıt ') + date(saved.latest.at) +
-          ' · ' + saved.latest.followers + ' takipçi · ' + saved.latest.following + ' takip edilen' : '';
+        find('[data-relationship-summary]').textContent = saved ?
+          localize((saved.latest.source === 'archive' ? 'Arşiv tarihi ' : 'Son kayıt ') + date(saved.latest.at)) +
+          ' · ' + localize(saved.latest.followers + ' takipçi · ' + saved.latest.following + ' takip edilen') : '';
         renderEvents();
         find('[data-relationship-scans]').replaceChildren(...(saved?.scans || []).slice().reverse().map(scan => {
           const row = document.createElement('li');
-          row.textContent = date(scan.at) + (scan.source === 'archive' ? ' · Arşiv' : ' · Canlı tarama') + ' · ' + scan.followers + ' takipçi · ' + scan.following + ' takip edilen';
+          row.textContent = [date(scan.at), localize(scan.source === 'archive' ? 'Arşiv' : 'Canlı tarama'),
+            localize(scan.followers + ' takipçi · ' + scan.following + ' takip edilen')].join(' · ');
           return row;
         }));
-      } catch (error) { if (current === revision) status.textContent = error.message; }
+      } catch (error) { if (current === revision) status.textContent = localize(error.message); }
     }
     function guessUsername() {
       const current = location.pathname.match(/^\/([a-z0-9._]{1,30})\/?$/i)?.[1].toLowerCase();
@@ -289,7 +311,7 @@ globalThis.FollowStudioRelationships = (() => {
       event.preventDefault();
       find('[data-relationship-start]').disabled = true;
       try { await send('relationships-start', {username: input.value.trim()}); await refresh(); }
-      catch (error) { status.textContent = error.message; find('[data-relationship-start]').disabled = false; }
+      catch (error) { status.textContent = localize(error.message); find('[data-relationship-start]').disabled = false; }
     };
     importForm.onsubmit = async event => {
       event.preventDefault();
@@ -300,19 +322,19 @@ globalThis.FollowStudioRelationships = (() => {
       const username = input.value.trim();
       const expectedAccount = account;
       if (!file || !input.value.trim() || !allTime || !Number.isSafeInteger(at) || at > Date.now()) {
-        result.textContent = 'Kullanıcı adını, arşiv tarihini, ZIP dosyasını ve tüm zamanlar onayını kontrol et.';
+        result.textContent = localize('Kullanıcı adını, arşiv tarihini, ZIP dosyasını ve tüm zamanlar onayını kontrol et.');
         return;
       }
       for (const control of importForm.elements) control.disabled = true;
       find('[data-relationship-start]').disabled = true;
       input.disabled = true;
-      result.textContent = 'Arşiv yerel olarak okunuyor…';
+      result.textContent = localize('Arşiv yerel olarak okunuyor…');
       try {
         const lists = await readArchive(file);
         await send('relationships-import', {username, expectedAccount, at, allTime, ...lists});
-        result.textContent = 'Arşiv kaydedildi.';
+        result.textContent = localize('Arşiv kaydedildi.');
         await refresh();
-      } catch (error) { result.textContent = error.message; }
+      } catch (error) { result.textContent = localize(error.message); }
       finally {
         for (const control of importForm.elements) control.disabled = false;
         find('[data-relationship-start]').disabled = false;
@@ -321,7 +343,7 @@ globalThis.FollowStudioRelationships = (() => {
       }
     };
     find('[data-relationship-stop]').onclick = async () => {
-      try { await send('relationships-stop'); await refresh(); } catch (error) { status.textContent = error.message; }
+      try { await send('relationships-stop'); await refresh(); } catch (error) { status.textContent = localize(error.message); }
     };
     find('select').onchange = () => { visibleEvents = 200; renderEvents(); };
     find('[data-relationship-more]').onclick = () => { visibleEvents += 200; renderEvents(); };

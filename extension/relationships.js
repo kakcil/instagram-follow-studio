@@ -53,16 +53,31 @@ function validRelationshipList(names, count) {
       normalizeFollowName(name) === name);
 }
 
-async function saveRelationshipSnapshot(data, saved, account, username, snapshot) {
+async function saveRelationshipSnapshot(data, saved, account, username, snapshot, photos = saved?.photos) {
   if (saved && snapshot.at <= saved.latest.at) throw new Error('Yeni kaydın tarihi son kayıttan daha yeni olmalı.');
   const changes = relationshipChanges(saved?.latest, snapshot);
-  const record = {account, username, latest: snapshot,
+  const record = {account, username, latest: snapshot, photos,
     scans: [...(saved?.scans || []), {at: snapshot.at, followers: snapshot.followers.length,
       following: snapshot.following.length, changes: changes.length, source: snapshot.source}],
     events: [...changes, ...(saved?.events || [])]};
   data.accounts = [...data.accounts.filter(item => !sameFollowAccount(item.account, account)), record];
   await chrome.storage.local.set({[relationshipsKey]: data});
   return changes.length;
+}
+
+function verifiedRelationshipPhotos(snapshot, photos) {
+  if (!photos || typeof photos !== 'object') return {};
+  const names = new Set([...snapshot.followers, ...snapshot.following]);
+  return Object.fromEntries(Object.entries(photos).filter(([name, photo]) => {
+    if (!names.has(name) || typeof photo !== 'string' || photo.length > 2048) return false;
+    try {
+      const url = new URL(photo);
+      return url.protocol === 'https:' && !url.username && !url.password &&
+        /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i.test(url.hostname);
+    } catch {
+      return false;
+    }
+  }));
 }
 
 async function handleRelationships(message, sender, unfollowSession) {
@@ -87,7 +102,7 @@ async function handleRelationships(message, sender, unfollowSession) {
   const data = (await chrome.storage.local.get(relationshipsKey))[relationshipsKey] || {accounts: []};
   const saved = data.accounts.find(record => sameFollowAccount(record.account, account));
   if (message.type === 'relationships-state') {
-    const summary = saved && {...saved, latest: {at: saved.latest.at,
+    const summary = saved && {account: saved.account, username: saved.username, scans: saved.scans, events: saved.events, latest: {at: saved.latest.at,
       followers: saved.latest.followers.length, following: saved.latest.following.length, source: saved.latest.source}};
     return {account, saved: summary, job: sameFollowAccount(job?.account, account) ? job : null};
   }
@@ -175,7 +190,8 @@ async function handleRelationships(message, sender, unfollowSession) {
   const snapshot = {at: Date.now(), followers: message.followers.slice().sort(),
     following: message.following.slice().sort(), source: 'live'};
   let changes;
-  try { changes = await saveRelationshipSnapshot(data, saved, account, job.username, snapshot); }
+  try { changes = await saveRelationshipSnapshot(data, saved, account, job.username, snapshot,
+    verifiedRelationshipPhotos(snapshot, message.photos)); }
   catch {
     await stopRelationshipScan(job, 'Kayıt alanına yazılamadı. Önceki kayıt korundu.');
     throw new Error('Tarama kaydedilemedi.');

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
-const files = ['manifest.json', 'bridge.js', 'background.js', 'follow-queue.js', 'follow-content.js', 'relationships.js', 'relationships-content.js', 'content.js'];
+const files = ['manifest.json', 'i18n.js', 'bridge.js', 'background.js', 'follow-queue.js', 'follow-content.js', 'relationships.js', 'relationships-content.js', 'content.js'];
 function crc32(bytes) {
   let crc = 0xffffffff;
   for (const byte of bytes) {

@@ -6,10 +6,10 @@
   "permissions": ["storage", "alarms", "cookies", "power"],
   "host_permissions": ["https://www.instagram.com/*"],
   "background": {"service_worker": "background.js"},
-  "action": {"default_title": "Follow Studio’yu aç"},
+  "action": {"default_title": "Follow Studio"},
   "content_scripts": [{
     "matches": ["https://www.instagram.com/*"],
-    "js": ["bridge.js", "follow-content.js", "relationships-content.js", "content.js"],
+    "js": ["i18n.js", "bridge.js", "follow-content.js", "relationships-content.js", "content.js"],
     "run_at": "document_end",
     "all_frames": true
   }]

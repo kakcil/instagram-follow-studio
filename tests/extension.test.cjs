@@ -10,6 +10,12 @@ const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const {zipJson} = require('./zip-fixture.cjs');
 const jobKey = 'local-unfollow-job';
 const cacheKey = 'follow-studio-cache';
+const relationshipsKey = 'follow-studio-relationships';
+
+function unfollowRelationshipFixture({at = Date.now(), source = 'live', followers = [],
+  following = ['fixture_candidate']} = {}) {
+  return {accounts: [{account: {id: '1001', storeId: '0'}, latest: {at, source, followers, following}}]};
+}
 
 function environment(initial = {}) {
   const local = structuredClone(initial), session = {}, changes = [];
@@ -77,17 +83,15 @@ function environment(initial = {}) {
     }, onCreated(fn) { created = fn; }};
 }
 
-async function app(env, url = 'https://www.instagram.com/', tabId = 1) {
-  const dom = new JSDOM('<html><body></body></html>', {url, runScripts: 'outside-only', pretendToBeVisual: true});
+async function app(env, url = 'https://www.instagram.com/', tabId = 1, language = 'tr') {
+  const dom = new JSDOM(`<html lang="${language}"><body></body></html>`, {url, runScripts: 'outside-only', pretendToBeVisual: true});
   const w = dom.window;
   w.structuredClone = structuredClone; w.TextDecoder = TextDecoder; w.crypto.randomUUID = randomUUID;
   w.chrome = {storage: env.storage, runtime: {
     sendMessage: message => env.send(message, tabId, 0, url), onMessage: {addListener() {}}
   }};
-  w.eval(read('bridge.js'));
-  w.eval(read('relationships-content.js'));
-  w.eval(read('follow-content.js'));
-  await w.eval(read('content.js'));
+  const scripts = JSON.parse(read('manifest.json')).content_scripts[0].js;
+  for (const filename of scripts) await w.eval(read(filename));
   return {dom, w, panel: w.document.querySelector('#ig-follow-manager')?.shadowRoot};
 }
 
@@ -133,9 +137,91 @@ test('MV3 package uses Instagram host, storage, alarms and account cookie access
   assert.doesNotMatch(read('content.js'), /GM_|eval\(|new Function|https:\/\/raw\.githubusercontent/);
 });
 
+test('panel uses Instagram page language for all tools, archive details and live verification messages', async t => {
+  const date = new Date('2023-11-14T12:00:00Z');
+  const archive = {[cacheKey]: {items: [{name: 'fixture_candidate', timestamp: date.getTime() / 1000}],
+    filename: 'archive.zip', followingNames: ['fixture_candidate'], followerNames: [], followers: 0, following: 1}};
+  for (const [language, labels] of [
+    ['en-GB', ['Follow queue', 'Unfollow', 'Relationships']],
+    ['tr-TR', ['Toplu takip', 'Takipten çık', 'Takipleşme']],
+    ['de', ['Follow queue', 'Unfollow', 'Relationships']]
+  ]) {
+    const {dom, panel} = await app(environment(archive), undefined, 1, language);
+    t.after(() => dom.window.close());
+    assert.deepEqual([...panel.querySelectorAll('.studio-tabs button')].map(tab => tab.textContent), labels);
+    panel.querySelector('[data-open]').click();
+    panel.querySelector('#studio-tab-unfollow').click();
+    await new Promise(resolve => setImmediate(resolve));
+    if (language === 'en-GB') {
+      assert.match(panel.querySelector('[data-caption]').textContent, /Saved list · archive.zip · As of the archive date/);
+      assert.equal(panel.querySelector('.date').textContent, 'Recorded follow date · ' + date.toLocaleDateString('en-GB'));
+      await panel.querySelector('[data-start]').onclick();
+      assert.match(panel.querySelector('.activity pre').textContent, /Complete a live scan in Relationships/);
+      panel.querySelector('#studio-tab-relationships').click();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(panel.querySelector('[data-relationship-start]').textContent, 'Create first snapshot');
+    }
+  }
+});
+
+test('verified scan photos render inline, recorded re-follows take priority, and protected accounts can be released', async t => {
+  const timestamp = Date.parse('2026-06-15T12:00:00Z');
+  const photo = 'https://scontent.cdninstagram.com/avatar-fixture.jpg';
+  const account = {id: '1001', storeId: '0'};
+  const protectedKey = 'follow-studio-protected';
+  const item = {name: 'fixture_candidate', timestamp: 1700000000};
+  const env = environment({[cacheKey]: {items: [], followingNames: [item.name], followerNames: [], followers: 0, following: 1},
+    [protectedKey]: {[item.name]: item}, 'follow-studio-follow-queue': {account, queue: [], history: [
+      {name: item.name, time: timestamp, outcome: 'followed'},
+      {name: item.name, time: timestamp + 100000, outcome: 'already'}
+    ]}});
+  const scan = await relationshipWorker(env, t, [], [item.name], {photos: {[item.name]: photo}});
+  assert.equal(scan.saved.photos[item.name], photo);
+  const {dom, w, panel} = await app(env, undefined, 1, 'en-GB');
+  t.after(() => dom.window.close());
+  panel.querySelector('[data-open]').click();
+  panel.querySelector('#studio-tab-unfollow').click();
+  panel.querySelector('[data-tab="protected"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  const row = panel.querySelector('[data-results] .account');
+  const avatar = row.querySelector('.avatar');
+  assert.match(avatar.textContent, /^FI/);
+  const image = avatar.querySelector('img');
+  assert.equal(image.src, photo);
+  image.dispatchEvent(new w.Event('load'));
+  assert.equal(image.style.opacity, '1');
+  assert.match(row.querySelector('.date').textContent, /15\/06\/2026/);
+  row.querySelector('button[aria-label="Remove protection for fixture_candidate"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(env.local[protectedKey][item.name], undefined);
+  assert.deepEqual(env.local[cacheKey].items.map(entry => entry.name), [item.name]);
+  assert.equal(env.local[jobKey], undefined);
+  env.setAccount('1002');
+  const other = await env.send({type: 'studio-profile-details'});
+  assert.equal(Object.keys(other.photos).length + Object.keys(other.followedAt).length, 0);
+});
+
+test('unfollow ZIP keeps the newest known follow date if a username appears twice', async t => {
+  const env = environment();
+  const {dom, panel, w} = await app(env);
+  t.after(() => dom.window.close());
+  const input = panel.querySelector('[data-zip]');
+  const file = new w.File([zipJson({
+    'followers_1.json': [],
+    'following.json': {relationships_following: [20, 10].map(timestamp => ({
+      title: 'fixture_candidate', string_list_data: [{timestamp}]
+    }))}
+  })], 'duplicate-fixture.zip');
+  await input.onchange({target: {files: [file]}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(env.local[cacheKey].following, 1);
+  assert.equal(env.local[cacheKey].items[0].timestamp, 20);
+});
+
 test('native extension UI works without Monkey and removes successful accounts', async t => {
   const env = environment({[cacheKey]: {items: [{name: 'fixture_candidate', timestamp: 1}],
-    followingNames: ['fixture_candidate', 'fixture_mutual'], followerNames: ['fixture_mutual'], followers: 1, following: 2}});
+    followingNames: ['fixture_candidate', 'fixture_mutual'], followerNames: ['fixture_mutual'], followers: 1, following: 2},
+    [relationshipsKey]: unfollowRelationshipFixture()});
   const {dom, panel} = await app(env);
   t.after(() => dom.window.close());
   assert.equal(panel.querySelector('[data-veil]').hidden, true);
@@ -157,6 +243,7 @@ test('native extension UI works without Monkey and removes successful accounts',
 
 test('background owns worker tabs, rejects concurrent controllers, rechecks follower/protection before clicks', async () => {
   const env = environment({[cacheKey]: {followingNames: ['fixture_candidate'], followerNames: []},
+    [relationshipsKey]: unfollowRelationshipFixture(),
     [jobKey]: {id: 'fixture-job', username: 'fixture_candidate', state: 'running'}});
   assert.equal((await env.send({type: 'studio-claim'})).claimed, true);
   assert.equal((await env.send({type: 'studio-claim'}, 2)).claimed, false);
@@ -170,6 +257,13 @@ test('background owns worker tabs, rejects concurrent controllers, rechecks foll
   assert.equal((await check()).outcome, 'protected');
   await env.storage.local.set({'follow-studio-protected': {}, [cacheKey]: {followingNames: ['fixture_candidate'], followerNames: ['fixture_candidate']}});
   assert.equal((await check()).outcome, 'follower');
+  await env.storage.local.set({[cacheKey]: {followingNames: ['fixture_candidate'], followerNames: []}});
+  env.setAccount('1002');
+  assert.equal((await check()).ok, false, 'A different Instagram account cannot reuse authorization');
+  env.setAccount('1001');
+  await env.storage.local.set({[relationshipsKey]: unfollowRelationshipFixture({at: Date.now() - 11 * 60000})});
+  assert.equal((await check()).ok, false, 'An expired scan cannot authorize the next click');
+  await env.storage.local.set({[relationshipsKey]: unfollowRelationshipFixture()});
   assert.equal((await env.send({type: 'studio-close-worker', tabId: 2})).ok, false);
   await env.send({type: 'studio-release'});
   assert.equal(env.tabs.has(opened.tabId), false);
@@ -178,9 +272,48 @@ test('background owns worker tabs, rejects concurrent controllers, rechecks foll
   assert.equal((await env.send({type: 'studio-claim'})).claimed, true, 'Reload releases owner');
 });
 
-test('storage persistence failure prevents a worker from opening', async t => {
+test('unfollow skips accounts that follow back or are missing from a complete live scan before opening a worker', async t => {
+  const names = ['fixture_follower', 'fixture_missing'];
+  const env = environment({[cacheKey]: {items: names.map(name => ({name, timestamp: 1})),
+    followingNames: names, followerNames: [], followers: 0, following: 2},
+    [relationshipsKey]: unfollowRelationshipFixture({followers: [names[0]], following: [names[0]]})});
+  const {dom, panel, w} = await app(env);
+  t.after(() => dom.window.close());
+  let workerTabs = 0;
+  env.onCreated(() => workerTabs++);
+  panel.querySelector('[data-manual] textarea').value = names.join(' ');
+  for (const mode of ['background', 'iframe']) {
+    panel.querySelector('[data-mode]').value = mode;
+    await panel.querySelector('[data-start]').onclick();
+    assert.equal(env.local[jobKey], undefined);
+    assert.equal(workerTabs, 0);
+    assert.equal(w.document.querySelector('iframe'), null);
+    assert.equal(env.local[cacheKey].items.length, 2);
+    assert.match(panel.querySelector('.activity pre').textContent, /fixture_follower: Canlı listede seni takip ediyor/);
+    assert.match(panel.querySelector('.activity pre').textContent, /fixture_missing: Canlı takip edilenler listesinde doğrulanamadı/);
+  }
+});
+
+test('unfollow cannot start with a ZIP comparison alone or an expired live scan', async t => {
   const env = environment({[cacheKey]: {items: [{name: 'fixture_candidate', timestamp: 1}],
     followingNames: ['fixture_candidate'], followerNames: []}});
+  const {dom, panel} = await app(env);
+  t.after(() => dom.window.close());
+  panel.querySelector('[data-manual] textarea').value = 'fixture_candidate';
+  for (const options of [null, {source: 'archive'}, {at: Date.now() - 11 * 60000}]) {
+    if (options) await env.storage.local.set({[relationshipsKey]: unfollowRelationshipFixture(options)});
+    await panel.querySelector('[data-start]').onclick();
+    assert.equal(env.local[jobKey], undefined);
+    assert.equal(env.session['follow-studio-session'].owner, null);
+    assert.equal(panel.querySelector('.activity').open, true);
+    assert.match(panel.querySelector('.activity pre').textContent, /canlı tarama gerekli/);
+  }
+});
+
+test('storage persistence failure prevents a worker from opening', async t => {
+  const env = environment({[cacheKey]: {items: [{name: 'fixture_candidate', timestamp: 1}],
+    followingNames: ['fixture_candidate'], followerNames: []},
+    [relationshipsKey]: unfollowRelationshipFixture()});
   const {dom, w} = await app(env);
   t.after(() => dom.window.close());
   const bridge = await w.FollowStudioBridge.connect();
@@ -225,6 +358,7 @@ test('follow queue opens inactive tabs, logs confirmed follows and pauses with a
   let clicks = 0;
   button.onclick = () => { clicks++; w.setTimeout(() => { button.textContent = 'Takiptesin'; }, 20); };
   w.chrome = {runtime: {sendMessage: message => env.send(message, tab.id, 0, tab.url)}};
+  w.eval(read('i18n.js'));
   w.eval(read('follow-content.js'));
   await w.eval('FollowStudioQueue.work(' + JSON.stringify(job.id) + ')');
   assert.equal(env.local[key].job.phase, 'verifying');
@@ -394,6 +528,7 @@ test('follow worker verifies stable Turkish/English states and retries at most o
       code = message.code;
       return {ok: true};
     }}};
+    w.eval(read('i18n.js'));
     w.eval(read('follow-content.js'));
     await w.eval("FollowStudioQueue.work('fixture')");
     if (phase === 'verifying') await w.eval("FollowStudioQueue.work('fixture')");
@@ -723,7 +858,8 @@ async function relationshipWorker(env, t, followers, following, options = {}) {
       const render = () => {
         const rows = options.incomplete ? list.slice(0, 1) : list.slice(position, position + 2);
         scroller.innerHTML = rows.map(name => '<div><a href="/' + name + '/">' + name +
-          '</a><a href="/' + name + '/"><img alt="Avatar"></a></div>').join('');
+          '</a><a href="/' + name + '/"><img alt="Avatar"' +
+          (options.photos?.[name] ? ' src="' + options.photos[name] + '"' : '') + '></a></div>').join('');
       };
       Object.defineProperties(scroller, {
         clientHeight: {get: () => 100}, scrollHeight: {get: () => Math.max(200, list.length * 100)},
@@ -737,6 +873,7 @@ async function relationshipWorker(env, t, followers, following, options = {}) {
     };
   }
   w.chrome = {runtime: {sendMessage: message => env.send(message, job.tabId, 0, job.url)}};
+  w.eval(read('i18n.js'));
   w.eval(read('relationships-content.js'));
   await w.eval('FollowStudioRelationships.work(' + JSON.stringify(job.id) + ')');
   return {saved: env.local[stateKey]?.accounts[0], job: env.local[jobKey], scrolls, clicks};
@@ -1063,6 +1200,7 @@ test('follow control ignores hidden headings and collapses nested duplicate cont
     outcome = message.outcome;
     return {ok: true};
   }}};
+  w.eval(read('i18n.js'));
   w.eval(read('follow-content.js'));
   await w.eval("FollowStudioQueue.work('fixture')");
   await w.eval("FollowStudioQueue.work('fixture')");

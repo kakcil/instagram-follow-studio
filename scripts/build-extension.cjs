@@ -8,6 +8,13 @@ const replace = (before, after) => {
   if (!source.includes(before)) throw new Error('Shared source changed: ' + before.slice(0, 70));
   source = source.replace(before, after);
 };
+replace("  const localize = value => value;\n  const locale = () => 'tr-TR';",
+  '  const {text: localize, locale} = FollowStudioI18n;');
+replace('  const profileDetails = item => ({photo: item.photoUrl, followedAt: item.timestamp * 1000 || 0});', `  let profileData = {};
+  const profileDetails = item => ({
+    photo: profileData.photos?.[item.name] || item.photoUrl,
+    followedAt: Math.max(item.timestamp * 1000 || 0, profileData.followedAt?.[item.name] || 0)
+  });`);
 replace("  'use strict';", "  'use strict';\n  const scanId = new URL(location.href).searchParams.get('follow_studio_scan');\n  if (scanId) { if (window.top === window.self) await FollowStudioRelationships.work(scanId); return; }\n  if (window.top === window.self) {\n    const scan = await chrome.runtime.sendMessage({type: 'relationships-resume'});\n    if (scan?.ok && scan.id) { await FollowStudioRelationships.work(scan.id); return; }\n  }\n  const followId = new URL(location.href).searchParams.get('follow_studio_job');\n  if (followId) { if (window.top === window.self) await FollowStudioQueue.work(followId); return; }\n  if (window.top !== window.self && !new URL(location.href).searchParams.has('local_unfollow_job')) return;\n  const bridge = await FollowStudioBridge.connect();\n  const {getValue: storageGet, setValue: storageSet, deleteValue: storageDelete} = bridge;");
 source = source.replaceAll('GM_getValue', 'storageGet').replaceAll('GM_setValue', 'storageSet').replaceAll('GM_deleteValue', 'storageDelete');
 
@@ -33,7 +40,18 @@ replace("        storageSet(key, {id, username, state: 'running', progress: ''})
 replace('handle = GM_openInTab(url, {active: false, insert: true, setParent: true});', 'handle = await bridge.openTab(url);');
 replace('        closeWorker();', '        await bridge.flush();\n        await closeWorker();');
 replace('    } finally { closeWorker(); }', '    } finally { await closeWorker(); }');
-replace("    if (runList === 'queue') {", "    try {\n      if (!await bridge.claim()) { report('Başka bir Instagram sekmesinde işlem sürüyor. Önce oradaki işlemi durdur.'); return; }\n    } catch (error) { report(error.message); return; }\n    if (runList === 'queue') {");
+replace("    if (runList === 'queue') {", "    panel.querySelector('.activity').open = true;\n    try {\n      if (!await bridge.claim()) { report('Başka bir Instagram sekmesinde işlem sürüyor. Önce oradaki işlemi durdur.'); return; }\n    } catch (error) { report(error.message); return; }\n    if (runList === 'queue') {");
+replace('        const operationStart = Date.now();', `        try {
+          await bridge.verifyCandidate(username);
+        } catch (error) {
+          if (!error.outcome) throw error;
+          report(\`\${username}: \${error.message}\`);
+          completed++; recordOutcome({state: 'skipped', outcome: error.outcome}); updateEstimate();
+          continue;
+        }
+        if (!running) break;
+        const operationStart = Date.now();`);
+replace('ZIP yükle veya son kaydedilen listeyle devam et.', 'ZIP yükle. Takipten çıkmadan önce İlişkiler sekmesinde canlı taramayı tamamla.');
 replace("lockControls(); report('Çalışma sona erdi.');", "lockControls(); try { await bridge.release(); } catch (error) { report(error.message); } report('Çalışma sona erdi.');");
 replace("panel.querySelector('[data-open]').onclick = () => { veil.hidden = false; refreshLists(false);", "panel.querySelector('[data-open]').onclick = () => { if (!running && !loading) { listData = storageGet('follow-studio-cache', null); runSummary = storageGet('follow-studio-run-summary', null); excluded = new Set(listData && listData.excluded || []); } veil.hidden = false; refreshLists();");
 source = source.replaceAll("querySelector('input[type=number]')", "querySelector('#wait-seconds')")
@@ -81,12 +99,32 @@ replace('\n})();', `\n  async function readRelationshipArchive(file) {
       following: await namesFrom(followingFiles, 'relationships_following')};
   }
   FollowStudioQueue.attach(panel, refreshLists, readRelationshipArchive);
+  let profileDetailsRevision = 0;
+  async function refreshProfileDetails() {
+    const revision = ++profileDetailsRevision;
+    profileData = {};
+    if (veil.hidden) return;
+    try {
+      const data = await bridge.profileDetails();
+      if (revision !== profileDetailsRevision) return;
+      profileData = data;
+    } catch {}
+    if (revision === profileDetailsRevision) refreshLists(false);
+  }
+  veil.addEventListener('studio-visibility', refreshProfileDetails);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || veil.hidden) return;
+    const history = changes['follow-studio-follow-queue'];
+    if (changes['follow-studio-relationships'] || history?.oldValue?.history?.length !== history?.newValue?.history?.length) {
+      void refreshProfileDetails();
+    }
+  });
   if (await bridge.ready()) panel.querySelector('[data-open]').click();
 })().catch(error => {
   console.error('Follow Studio:', error.message);
   const host = document.querySelector('#ig-follow-manager');
   const status = host?.shadowRoot?.querySelector('[data-status]');
-  if (status) status.textContent = 'Hata: ' + error.message;
+  if (status) status.textContent = FollowStudioI18n.text('Hata: ' + FollowStudioI18n.text(error.message));
 });`);
 source = '// Generated by scripts/build-extension.cjs. Edit shared source or build adapter.\n' + source;
 const target = path.join(root, 'extension/content.js');

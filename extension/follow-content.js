@@ -1,6 +1,7 @@
 'use strict';
 
 globalThis.FollowStudioQueue = (() => {
+  const {text: localize, locale} = FollowStudioI18n;
   const key = 'follow-studio-follow-queue';
   const settings = {min: 5, max: 5, batch: 5, rest: 30, limit: 10};
   const labels = {
@@ -197,7 +198,7 @@ globalThis.FollowStudioQueue = (() => {
     const tabs = document.createElement('div');
     tabs.className = 'studio-tabs';
     tabs.setAttribute('role', 'tablist');
-    tabs.setAttribute('aria-label', 'Follow Studio araçları');
+    tabs.setAttribute('aria-label', localize('Follow Studio araçları'));
     const relationshipView = FollowStudioRelationships.createView(panel, readArchive);
     const modules = [
       {id: 'follow', title: 'Toplu takip', view: section,
@@ -343,12 +344,12 @@ globalThis.FollowStudioQueue = (() => {
     quick.type = 'button';
     quick.className = 'launcher';
     quick.dataset.followQuick = '';
-    quick.setAttribute('aria-label', 'Takip kuyruğuna ekle');
+    quick.setAttribute('aria-label', localize('Takip kuyruğuna ekle'));
     const addIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 19v-2a4 4 0 0 1 4-4h4m6 0v6m-3-3h6"/></svg>';
     const queuedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 19v-2a4 4 0 0 1 4-4h4m3 3 2 2 5-5"/></svg>';
     const heldIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v5m0 3h.01"/></svg>';
     quick.innerHTML = addIcon;
-    gear.setAttribute('aria-label', 'Follow Studio araçları');
+    gear.setAttribute('aria-label', localize('Follow Studio araçları'));
     gear.setAttribute('aria-expanded', 'false');
     gear.setAttribute('aria-controls', 'studio-floating-panel');
     gear.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>';
@@ -358,6 +359,7 @@ globalThis.FollowStudioQueue = (() => {
     toast.hidden = true;
     dock.append(quick, gear, toast);
     panel.append(dock);
+    FollowStudioI18n.markup(panel);
 
     const find = selector => section.querySelector(selector);
     const form = find('#studio-follow-form');
@@ -368,9 +370,12 @@ globalThis.FollowStudioQueue = (() => {
       if (veil.hidden || section.hidden) return;
       const {status, running, next, job, count = 0, settings: saved = {}} = timingState;
       const remaining = Math.max(0, Math.ceil((next - Date.now()) / 1000));
-      feedback.textContent = (status || 'Hazır') + (running
-        ? ' · Oturum ' + count + '/' + (saved.limit || settings.limit) +
-          (next && !job ? ' · Kalan ' + Math.floor(remaining / 60) + ' dk ' + remaining % 60 + ' sn' : '') : '');
+      const parts = [localize(status || 'Hazır')];
+      if (running) {
+        parts.push(localize('Oturum ' + count + '/' + (saved.limit || settings.limit)));
+        if (next && !job) parts.push(localize('Kalan ' + Math.floor(remaining / 60) + ' dk ' + remaining % 60 + ' sn'));
+      }
+      feedback.textContent = parts.join(' · ');
     }
     const history = find('[data-history-section]');
     const failedSection = find('[data-failed-section]');
@@ -378,7 +383,7 @@ globalThis.FollowStudioQueue = (() => {
     let toastTimer;
     function showToast(text) {
       clearTimeout(toastTimer);
-      toast.textContent = text;
+      toast.textContent = localize(text);
       toast.hidden = false;
       toastTimer = setTimeout(() => { toast.hidden = true; }, 2400);
     }
@@ -387,7 +392,7 @@ globalThis.FollowStudioQueue = (() => {
       try { return await send(type, data); }
       catch (error) {
         if (veil.hidden) showToast(error.message);
-        else feedback.textContent = error.message;
+        else feedback.textContent = localize(error.message);
       }
     }
 
@@ -395,7 +400,7 @@ globalThis.FollowStudioQueue = (() => {
       timingState = state;
       if (veil.hidden || section.hidden) return;
       const {queue = [], failed = [], failures = [], history: entries = [], running, job, next} = state;
-      find('[data-follow-count]').textContent = queue.length + ' profil';
+      find('[data-follow-count]').textContent = localize(queue.length + ' profil');
       find('[data-follow-stop]').disabled = !running;
       find('[type="submit"]').disabled = Boolean(running) || !queue.length;
       updateCountdown();
@@ -404,8 +409,8 @@ globalThis.FollowStudioQueue = (() => {
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'secondary';
-        remove.textContent = 'Kaldır';
-        remove.setAttribute('aria-label', '@' + name + ' profilini kaldır');
+        remove.textContent = localize('Kaldır');
+        remove.setAttribute('aria-label', localize('@' + name + ' profilini kaldır'));
         remove.disabled = job?.name === name;
         remove.onclick = () => action('follow-remove', {name});
         row.append('@' + name, remove);
@@ -413,7 +418,7 @@ globalThis.FollowStudioQueue = (() => {
       });
       if (!rows.length) {
         const empty = document.createElement('li');
-        empty.textContent = failed.length ? 'Kuyrukta kalan profil yok.' : 'Bir profil açıp kişi ekleme ikonuna bas.';
+        empty.textContent = localize(failed.length ? 'Kuyrukta kalan profil yok.' : 'Bir profil açıp kişi ekleme ikonuna bas.');
         rows.push(empty);
       }
       find('[data-follow-list]').replaceChildren(...rows);
@@ -424,26 +429,30 @@ globalThis.FollowStudioQueue = (() => {
         const requeue = document.createElement('button');
         requeue.type = 'button';
         requeue.className = 'secondary';
-        requeue.textContent = 'Yeniden kuyruğa al';
+        requeue.textContent = localize('Yeniden kuyruğa al');
         requeue.disabled = Boolean(running);
         requeue.onclick = () => action('follow-requeue', {name: entry.name});
-        const attempts = entry.totalAttempts == null ? '' : ' · Toplam ' + entry.totalAttempts + ' deneme';
-        const lastAttempt = entry.lastAttemptAt ? ' · Son deneme ' + new Date(entry.lastAttemptAt).toLocaleString() : '';
-        const skipped = entry.skipped ? ' · Atlandı, sonraki profile geçildi' : '';
-        row.append('@' + entry.name + ' · ' + entry.reason + skipped + attempts + lastAttempt + ' ', requeue);
+        const parts = ['@' + entry.name, localize(entry.reason)];
+        if (entry.skipped) parts.push(localize('Atlandı, sonraki profile geçildi'));
+        if (entry.totalAttempts != null) parts.push(localize('Toplam ' + entry.totalAttempts + ' deneme'));
+        if (entry.lastAttemptAt) parts.push(localize('Son deneme ' + new Date(entry.lastAttemptAt).toLocaleString(locale())));
+        row.append(parts.join(' · ') + ' ', requeue);
         return row;
       }) : []));
       failureLog.hidden = !failures.length;
       find('[data-follow-errors]').replaceChildren(...(failureLog.open ? failures.map(entry => {
         const row = document.createElement('li');
-        row.textContent = (entry.name ? '@' + entry.name + ' · ' : '') + entry.reason + ' · ' +
-          new Date(entry.time).toLocaleString() + ' · Toplam ' + entry.totalAttempts + ' deneme';
+        const parts = [localize(entry.reason), new Date(entry.time).toLocaleString(locale()),
+          localize('Toplam ' + entry.totalAttempts + ' deneme')];
+        if (entry.name) parts.unshift('@' + entry.name);
+        row.textContent = parts.join(' · ');
         return row;
       }) : []));
       find('[data-follow-history]').replaceChildren(...(history.open ? entries.map(entry => {
         const row = document.createElement('li');
-        row.textContent = '@' + entry.name + ' · ' + status[entry.outcome] + ' · ' + new Date(entry.time).toLocaleString() +
-          (entry.totalAttempts == null ? '' : ' · Toplam ' + entry.totalAttempts + ' deneme');
+        const parts = ['@' + entry.name, localize(status[entry.outcome]), new Date(entry.time).toLocaleString(locale())];
+        if (entry.totalAttempts != null) parts.push(localize('Toplam ' + entry.totalAttempts + ' deneme'));
+        row.textContent = parts.join(' · ');
         return row;
       }) : []));
     }
@@ -462,7 +471,7 @@ globalThis.FollowStudioQueue = (() => {
       quick.toggleAttribute('data-queued', queued);
       quick.toggleAttribute('data-held', held);
       quick.innerHTML = queued ? queuedIcon : held ? heldIcon : addIcon;
-      quick.setAttribute('aria-label', queued ? 'Kuyruğa eklendi · Kuyruktan kaldır' : held ? 'Takip doğrulanamadı · Listeyi aç' : 'Takip kuyruğuna ekle');
+      quick.setAttribute('aria-label', localize(queued ? 'Kuyruğa eklendi · Kuyruktan kaldır' : held ? 'Takip doğrulanamadı · Listeyi aç' : 'Takip kuyruğuna ekle'));
     }
     async function refreshProfile() {
       const current = ++profileRevision;
@@ -508,19 +517,19 @@ globalThis.FollowStudioQueue = (() => {
         const {text, count} = await send('follow-export');
         transferInput.value = text;
         if (!count) {
-          transferStatus.textContent = 'Kopyalanacak profil kalmadı.';
+          transferStatus.textContent = localize('Kopyalanacak profil kalmadı.');
           return;
         }
         try {
           await navigator.clipboard.writeText(text);
-          transferStatus.textContent = count + ' profil kopyalandı. Diğer bilgisayarda yapıştırabilirsin.';
+          transferStatus.textContent = localize(count + ' profil kopyalandı. Diğer bilgisayarda yapıştırabilirsin.');
         } catch {
           transferInput.focus();
           transferInput.select();
-          transferStatus.textContent = 'Kalan liste seçildi. Kopyalamak için Ctrl+C kullan.';
+          transferStatus.textContent = localize('Kalan liste seçildi. Kopyalamak için Ctrl+C kullan.');
         }
       } catch (error) {
-        transferStatus.textContent = error.message;
+        transferStatus.textContent = localize(error.message);
       } finally { copyList.disabled = false; }
     };
     pasteList.onclick = async () => {
@@ -528,15 +537,15 @@ globalThis.FollowStudioQueue = (() => {
       try {
         const text = await navigator.clipboard.readText();
         if (!text.trim()) {
-          transferStatus.textContent = 'Pano boş.';
+          transferStatus.textContent = localize('Pano boş.');
           return;
         }
         transferInput.value = text;
         transferInput.focus();
-        transferStatus.textContent = 'Liste yapıştırıldı. Eklemek için Listeyi kuyruğa ekle düğmesine bas.';
+        transferStatus.textContent = localize('Liste yapıştırıldı. Eklemek için Listeyi kuyruğa ekle düğmesine bas.');
       } catch {
         transferInput.focus();
-        transferStatus.textContent = 'Bu alana Ctrl+V ile yapıştırıp Listeyi kuyruğa ekle düğmesine bas.';
+        transferStatus.textContent = localize('Bu alana Ctrl+V ile yapıştırıp Listeyi kuyruğa ekle düğmesine bas.');
       } finally { pasteList.disabled = false; }
     };
     addList.onsubmit = async event => {
@@ -546,7 +555,7 @@ globalThis.FollowStudioQueue = (() => {
       const result = addList.querySelector('[data-follow-import-result]');
       const text = input.value;
       if (!text.trim()) {
-        result.textContent = 'Her satıra bir kullanıcı adı yaz.';
+        result.textContent = localize('Her satıra bir kullanıcı adı yaz.');
         return;
       }
       submit.disabled = true;
@@ -557,10 +566,10 @@ globalThis.FollowStudioQueue = (() => {
         if (counts.completed) summary.push(counts.completed + ' daha önce tamamlandığı için atlandı');
         if (counts.held) summary.push(counts.held + ' doğrulanamayan profillerde');
         if (counts.invalid) summary.push(counts.invalid + ' geçersiz satır');
-        result.textContent = summary.join(' · ');
+        result.textContent = summary.map(localize).join(' · ');
         if (!counts.invalid && input.value === text) input.value = '';
       } catch (error) {
-        result.textContent = error.message;
+        result.textContent = localize(error.message);
       } finally {
         submit.disabled = false;
       }
@@ -591,7 +600,7 @@ globalThis.FollowStudioQueue = (() => {
             (state?.timingVersion ? state.settings?.[name] : undefined) ?? settings[name];
         }
         render(state);
-      } catch (error) { feedback.textContent = error.message; }
+      } catch (error) { feedback.textContent = localize(error.message); }
     }
     veil.addEventListener('studio-visibility', () => {
       clearInterval(countdownTimer);

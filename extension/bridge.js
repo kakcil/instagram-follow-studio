@@ -48,6 +48,9 @@ globalThis.FollowStudioBridge = {
       flush,
       async claim() { await flush(); return (await message({type: 'studio-claim'})).claimed; },
       async release() { await writes; await message({type: 'studio-release'}); await flush(); },
+      async verifyCandidate(username) {
+        await message({type: 'studio-verify-candidate', username});
+      },
       async checkJob(username, id) {
         await flush();
         return (await message({type: 'studio-check', username, id})).job;
@@ -57,7 +60,8 @@ globalThis.FollowStudioBridge = {
         const {tabId} = await message({type: 'studio-open-worker', url});
         return {close: () => message({type: 'studio-close-worker', tabId})};
       },
-      async ready() { return (await message({type: 'studio-ready'})).open; }
+      async ready() { return (await message({type: 'studio-ready'})).open; },
+      async profileDetails() { return message({type: 'studio-profile-details'}); }
     };
   }
 };

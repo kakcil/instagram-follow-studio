@@ -12,6 +12,12 @@
   if (window.top !== window.self && !new URL(location.href).searchParams.has('local_unfollow_job')) return;
   const bridge = await FollowStudioBridge.connect();
   const {getValue: storageGet, setValue: storageSet, deleteValue: storageDelete} = bridge;
+  const {text: localize, locale} = FollowStudioI18n;
+  let profileData = {};
+  const profileDetails = item => ({
+    photo: profileData.photos?.[item.name] || item.photoUrl,
+    followedAt: Math.max(item.timestamp * 1000 || 0, profileData.followedAt?.[item.name] || 0)
+  });
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const key = 'local-unfollow-job';
   const labels = {
@@ -104,9 +110,9 @@
         <div class="stats"><div class="stat"><small data-stat-label="first">TAKİPÇİ</small><strong data-followers>—</strong></div><div class="stat"><small data-stat-label="second">TAKİP EDİLEN</small><strong data-following>—</strong></div><div class="stat"><small data-stat-label="third">İŞLEM LİSTESİ</small><strong data-count>0</strong></div></div>
         <p class="note" data-run-note hidden></p>
         <label class="upload"><span class="upload-icon" aria-hidden="true">↥</span><span><strong>Instagram ZIP dosyanı seç</strong><small>JSON arşivi · Bilgisayarında işlenir</small></span><input data-zip type="file" accept=".zip" aria-label="Instagram ZIP dosyası seç"></label>
-        <p class="file-caption" data-caption>ZIP yükle veya son kaydedilen listeyle devam et.</p><button class="secondary" data-reset>Liste hafızasını sıfırla</button>
+        <p class="file-caption" data-caption>ZIP yükle. Takipten çıkmadan önce İlişkiler sekmesinde canlı taramayı tamamla.</p><button class="secondary" data-reset>Liste hafızasını sıfırla</button>
         <div class="toolbar"><div class="tabs" role="tablist" aria-label="Hesap listeleri"><button data-tab="queue" role="tab" aria-selected="true">Takip bırak <span class="badge" data-q-badge>0</span></button><button data-tab="protected" role="tab" aria-selected="false">Korunanlar <span class="badge" data-p-badge>0</span></button><button data-tab="frozen" role="tab" aria-selected="false">Dondurulmuş hesaplar <span class="badge" data-f-badge>0</span></button></div><select data-sort aria-label="Takip etme tarihine göre sırala"><option value="asc">ASC · Eski → yeni</option><option value="desc">DESC · Yeni → eski</option></select></div>
-        <div class="list" data-results role="tabpanel"></div><p class="note" data-note>Hide: hesabı kalıcı olarak korur. ×: yalnızca bu listeden çıkarır.</p>
+        <div class="list" data-results role="tabpanel"></div><p class="note" data-note>Koru: hesabı kalıcı olarak korur. ×: yalnızca bu listeden çıkarır.</p>
         <details data-manual><summary>Elle kullanıcı listesi gir</summary><textarea rows="4" aria-label="İşlem listesi" placeholder="@kullanıcı veya profil linki · Her satırda bir hesap"></textarea><p class="manual-hint">Korunan hesaplar elle girilse de işleme alınmaz.</p><button class="secondary" data-list>Listeyi yapıştır</button></details>
         <div class="settings"><label for="worker-mode">İşlem yöntemi</label><select id="worker-mode" data-mode><option value="iframe">Iframe · Sekme açmadan</option><option value="background">Arka plan sekmesi</option></select></div>
         <div class="settings"><label for="wait-seconds">İşlemler arası bekleme</label><div class="seconds"><input id="wait-seconds" type="number" min="0" value="5" aria-label="Bekleme saniyesi"><span>saniye</span></div></div>
@@ -131,8 +137,12 @@
     const average = completed ? elapsedOperations / completed / 1000 : 0;
     const seconds = Math.max(0, remaining - 1) * delay + remaining * average;
     const finish = new Date(Date.now() + seconds * 1000);
-    const duration = seconds >= 3600 ? `${Math.floor(seconds / 3600)} sa ${Math.ceil((seconds % 3600) / 60)} dk` : `${Math.ceil(seconds / 60)} dk`;
-    panel.querySelector('[data-estimate]').textContent = count ? `${count} hesap · Tahmini süre: ${duration} · Bitiş: ${finish.toLocaleString('tr-TR')} ${completed ? `(kalan ${remaining} hesap; ölçülen işlem ortalaması ${average.toFixed(1)} sn)` : `(yalnızca bekleme; gerçek tahmin ilk işlemden sonra)`}` : 'Liste girildiğinde tahmini bitiş burada görünür.';
+    const duration = localize(seconds >= 3600 ? `${Math.floor(seconds / 3600)} sa ${Math.ceil((seconds % 3600) / 60)} dk` : `${Math.ceil(seconds / 60)} dk`);
+    const detail = localize(completed ? `(kalan ${remaining} hesap; ölçülen işlem ortalaması ${average.toFixed(1)} sn)` :
+      '(yalnızca bekleme; gerçek tahmin ilk işlemden sonra)');
+    panel.querySelector('[data-estimate]').textContent = localize(count ?
+      `${count} hesap · Tahmini süre: ${duration} · Bitiş: ${finish.toLocaleString(locale())} ${detail}` :
+      'Liste girildiğinde tahmini bitiş burada görünür.');
   }
   panel.querySelector('[data-manual] textarea').addEventListener('input', updateEstimate);
   panel.querySelector('#wait-seconds').addEventListener('input', updateEstimate);
@@ -167,7 +177,7 @@
     if (record && record.reason === 'Kullanıcı takipleştiğini doğruladı') delete protectedAccounts[name];
   }
   storageSet(protectedKey, protectedAccounts);
-  const report = message => { log.textContent += message + '\n'; log.scrollTop = log.scrollHeight; };
+  const report = message => { log.textContent += localize(message) + '\n'; log.scrollTop = log.scrollHeight; };
   const protectedNow = name => Object.prototype.hasOwnProperty.call(storageGet(protectedKey, {}), name);
   const parseName = value => {
     let name = value.trim().replace(/^@/, '').toLowerCase();
@@ -184,9 +194,11 @@
   };
   function sortedAccounts(items, order) {
     return [...items].sort((a,b) => {
-      if (!a.timestamp && b.timestamp) return 1;
-      if (a.timestamp && !b.timestamp) return -1;
-      return (order === 'desc' ? -1 : 1) * (a.timestamp - b.timestamp) || a.name.localeCompare(b.name);
+      const first = profileDetails(a).followedAt;
+      const second = profileDetails(b).followedAt;
+      if (!first && second) return 1;
+      if (first && !second) return -1;
+      return (order === 'desc' ? -1 : 1) * (first - second) || a.name.localeCompare(b.name);
     });
   }
   const queueItems = () => sortedAccounts((listData && listData.items || []).filter(item =>
@@ -206,7 +218,7 @@
     if (runSummary) { runSummary.frozen = (runSummary.frozen || 0) + 1; storageSet('follow-studio-run-summary', runSummary); }
   }
   function updateStartButton() {
-    start.textContent = activeTab === 'frozen' ? 'Başlat ↻' : 'Başlat ↗';
+    start.textContent = localize(activeTab === 'frozen' ? 'Başlat ↻' : 'Başlat ↗');
     start.disabled = running || loading || activeTab === 'protected' || Boolean(listData && listData.archiveWarning) || (activeTab === 'frozen' && !frozenItems(true).length);
   }
   function saveCache() { if (listData) { listData.excluded = [...excluded]; storageSet('follow-studio-cache', listData); } }
@@ -217,9 +229,9 @@
     const third = panel.querySelector('[data-count]');
     const note = panel.querySelector('[data-run-note]');
     if (runSummary) {
-      labels[0].textContent = 'TAKİPTEN ÇIKARILAN';
-      labels[1].textContent = 'BAŞARISIZ / ATLANAN';
-      labels[2].textContent = 'KALAN';
+      labels[0].textContent = localize('TAKİPTEN ÇIKARILAN');
+      labels[1].textContent = localize('BAŞARISIZ / ATLANAN');
+      labels[2].textContent = localize('KALAN');
       first.textContent = runSummary.unfollowed;
       second.textContent = runSummary.failed;
       third.textContent = Math.max(0, runSummary.total - runSummary.processed);
@@ -230,9 +242,10 @@
       if (runSummary.already) extras.push(`${runSummary.already} hesap zaten takip edilmiyordu`);
       if (runSummary.frozen) extras.push(`${runSummary.frozen} hesap dondurulmuş bölümünde`);
       if (runSummary.protected) extras.push(`${runSummary.protected} korunan hesap atlandı`);
-      note.textContent = `${runSummary.processed} / ${runSummary.total} hesap işlendi` + (extras.length ? ' · ' + extras.join(' · ') : '') + (!running ? ' · Son çalışmanın sonucu' : '');
+      if (!running) extras.push('Son çalışmanın sonucu');
+      note.textContent = [`${runSummary.processed} / ${runSummary.total} hesap işlendi`, ...extras].map(localize).join(' · ');
     } else {
-      labels[0].textContent = 'TAKİPÇİ'; labels[1].textContent = 'TAKİP EDİLEN'; labels[2].textContent = 'İŞLEM LİSTESİ';
+      labels[0].textContent = localize('TAKİPÇİ'); labels[1].textContent = localize('TAKİP EDİLEN'); labels[2].textContent = localize('İŞLEM LİSTESİ');
       first.textContent = listData ? listData.followers : '—'; second.textContent = listData ? listData.following : '—'; third.textContent = activeTab === 'frozen' ? frozenItems().length : queue.length;
       first.style.color = ''; second.style.color = ''; note.hidden = true;
     }
@@ -257,7 +270,7 @@
     panel.querySelector('[data-f-badge]').textContent = frozenItems().length;
     panel.querySelector('[data-manual]').hidden = activeTab !== 'queue';
     for (const tab of panel.querySelectorAll('[data-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.tab === activeTab));
-    panel.querySelector('[data-note]').textContent = activeTab === 'protected' ? 'Bu hesaplar kalıcı olarak korunur ve hiçbir işlem listesinde takipten çıkarılmaz.' : activeTab === 'frozen' ? 'Bulunamayan hesaplar. Başlat yalnızca bu bölümü yeniden dener; korunanlar ve ZIP’e göre uygun olmayanlar işleme alınmaz.' : 'Hide: hesabı kalıcı olarak korur. ×: yalnızca bu listeden çıkarır.';
+    panel.querySelector('[data-note]').textContent = localize(activeTab === 'protected' ? 'Bu hesaplar kalıcı olarak korunur ve hiçbir işlem listesinde takipten çıkarılmaz.' : activeTab === 'frozen' ? 'Bulunamayan hesaplar. Başlat yalnızca bu bölümü yeniden dener; korunanlar ve ZIP’e göre uygun olmayanlar işleme alınmaz.' : 'Koru: hesabı kalıcı olarak korur. ×: yalnızca bu listeden çıkarır.');
     if (syncQueue && listData && !running) panel.querySelector('[data-manual] textarea').value = queue.map(item => item.name).join('\n');
     const area = panel.querySelector('[data-results]');
     area.replaceChildren();
@@ -265,29 +278,61 @@
     const items = activeTab === 'protected' ? sortedAccounts(Object.values(protectedAccounts), panel.querySelector('[data-sort]').value) : activeTab === 'frozen' ? frozenItems() : queue;
     if (!items.length) {
       const empty = document.createElement('div'); empty.className = 'empty';
-      empty.textContent = activeTab === 'protected' ? 'Hide ile koruduğun hesaplar burada görünecek.' : activeTab === 'frozen' ? 'Bulunamayan hesaplar buraya taşınacak.' : listData ? (listData.archiveWarning || 'İşlem listesinde hesap kalmadı.') : 'ZIP dosyanı yükle; seni takip etmeyenler burada görünsün.';
+      empty.textContent = localize(activeTab === 'protected' ? 'Koru ile koruduğun hesaplar burada görünecek.' : activeTab === 'frozen' ? 'Bulunamayan hesaplar buraya taşınacak.' : listData ? (listData.archiveWarning || 'İşlem listesinde hesap kalmadı.') : 'ZIP dosyanı yükle; seni takip etmeyenler burada görünsün.');
       area.append(empty);
     }
     for (const item of items) {
       const row = document.createElement('div'); row.className = 'account' + (activeTab === 'protected' ? ' protected' : '');
       const avatar = document.createElement('span'); avatar.className = 'avatar'; avatar.textContent = item.name.slice(0,2).toUpperCase();
+      const {photo, followedAt} = profileDetails(item);
+      try {
+        const url = new URL(photo);
+        if (url.protocol === 'https:' && !url.username && !url.password &&
+            /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i.test(url.hostname)) {
+          const image = document.createElement('img');
+          image.alt = '';
+          image.loading = 'lazy';
+          image.referrerPolicy = 'no-referrer';
+          avatar.style.position = 'relative';
+          image.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;object-fit:cover;opacity:0';
+          image.addEventListener('load', () => { image.style.opacity = '1'; }, {once: true});
+          avatar.append(image);
+          image.src = url.href;
+        }
+      } catch {}
       const info = document.createElement('div'); info.className = 'account-info';
       const link = document.createElement('a'); link.href = `https://www.instagram.com/${item.name}/`; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = '@' + item.name;
-      const date = document.createElement('span'); date.className = 'date'; date.textContent = item.timestamp ? 'Takip tarihi · ' + new Date(item.timestamp * 1000).toLocaleDateString('tr-TR') : 'Takip tarihi bilinmiyor';
+      const date = document.createElement('span'); date.className = 'date'; date.textContent = localize(followedAt ? 'Kayıtlı takip tarihi · ' + new Date(followedAt).toLocaleDateString(locale()) : 'Takip tarihi bilinmiyor');
       info.append(link,date);
       if (activeTab === 'frozen') {
         const attempt = document.createElement('span'); attempt.className = 'date';
-        attempt.textContent = eligibleNow(item.name) ? ('Son deneme · ' + (item.lastAttemptAt ? new Date(item.lastAttemptAt).toLocaleString('tr-TR') : '—')) : 'Bu ZIP’e göre işleme alınamaz';
+        attempt.textContent = localize(eligibleNow(item.name) ? ('Son deneme · ' + (item.lastAttemptAt ? new Date(item.lastAttemptAt).toLocaleString(locale()) : '—')) : 'Bu ZIP’e göre işleme alınamaz');
         info.append(attempt);
-      }
-      if (item.photoUrl) {
-        const photo = document.createElement('a'); photo.href = item.photoUrl; photo.target = '_blank'; photo.rel = 'noopener noreferrer'; photo.textContent = 'Fotoğraf ↗'; photo.style.cssText = 'color:#a99ed0;font-size:10px;font-weight:400;margin-top:3px'; info.append(photo);
       }
       row.append(avatar,info);
       if (activeTab === 'protected') {
-        const tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = '✓ Korunuyor'; row.append(tag);
+        const tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = localize('✓ Korunuyor'); row.append(tag);
+        const remove = document.createElement('button');
+        remove.className = 'remove';
+        remove.textContent = '×';
+        remove.title = localize('Korumayı kaldır');
+        remove.setAttribute('aria-label', localize(item.name + ' hesabının korumasını kaldır'));
+        remove.disabled = running || loading;
+        remove.onclick = () => {
+          if (running || loading) return;
+          protectedAccounts = storageGet(protectedKey, {});
+          delete protectedAccounts[item.name];
+          storageSet(protectedKey, protectedAccounts);
+          if (eligibleNow(item.name) && !excluded.has(item.name) && !listData.items?.some(entry => entry.name === item.name)) {
+            listData.items = [...(listData.items || []), {name: item.name, timestamp: item.timestamp, photoUrl: item.photoUrl}];
+            saveCache();
+          }
+          refreshLists();
+          report('@' + item.name + ' için koruma kaldırıldı.');
+        };
+        row.append(remove);
       } else {
-        const hide = document.createElement('button'); hide.className = 'row-action'; hide.textContent = 'Hide'; hide.title = 'Kalıcı olarak korunanlara taşı'; hide.disabled = running || loading;
+        const hide = document.createElement('button'); hide.className = 'row-action'; hide.textContent = localize('Koru'); hide.title = localize('Kalıcı olarak korunanlara taşı'); hide.disabled = running || loading;
         hide.onclick = () => {
           if (running || loading) return;
           protectedAccounts = storageGet(protectedKey, {});
@@ -297,7 +342,7 @@
           completed = 0; total = 0; elapsedOperations = 0;
           refreshLists(); report('@' + item.name + ' kalıcı olarak korundu.');
         };
-        const remove = document.createElement('button'); remove.className = 'remove'; remove.textContent = '×'; remove.title = 'Bu işlem listesinden çıkar'; remove.setAttribute('aria-label', item.name + ' hesabını bu listeden çıkar'); remove.disabled = running || loading;
+        const remove = document.createElement('button'); remove.className = 'remove'; remove.textContent = '×'; remove.title = localize('Bu işlem listesinden çıkar'); remove.setAttribute('aria-label', localize(item.name + ' hesabını bu listeden çıkar')); remove.disabled = running || loading;
         remove.onclick = () => { if (running || loading) return; if (activeTab === 'frozen') { delete frozenAccounts[item.name]; saveFrozen(); } else { excluded.add(item.name); saveCache(); } completed = 0; total = 0; elapsedOperations = 0; refreshLists(); };
         row.append(hide,remove);
       }
@@ -314,7 +359,7 @@
     panel.querySelector('[data-manual] textarea').disabled = running || loading;
     panel.querySelector('[data-list]').disabled = running || loading;
     start.disabled = running || loading || Boolean(listData && listData.archiveWarning);
-    panel.querySelector('[data-status]').textContent = loading ? 'ZIP okunuyor' : running ? 'Çalışıyor' : 'Hazır';
+    panel.querySelector('[data-status]').textContent = localize(loading ? 'ZIP okunuyor' : running ? 'Çalışıyor' : 'Hazır');
     refreshLists(false);
   }
   panel.querySelector('[data-mode]').value = storageGet('follow-studio-mode', 'iframe');
@@ -327,7 +372,7 @@
   };
   for (const tab of panel.querySelectorAll('[data-tab]')) tab.onclick = () => { activeTab = tab.dataset.tab; refreshLists(false); };
   panel.querySelector('[data-list]').onclick = () => {
-    const list = window.prompt('Kullanıcı adlarını veya profil linklerini yapıştır:', panel.querySelector('[data-manual] textarea').value);
+    const list = window.prompt(localize('Kullanıcı adlarını veya profil linklerini yapıştır:'), panel.querySelector('[data-manual] textarea').value);
     if (list !== null) { panel.querySelector('[data-manual] textarea').value = list.split(/[\s,;]+/).filter(Boolean).join('\n'); updateEstimate(); }
   };
   const veil = panel.querySelector('[data-veil]');
@@ -340,7 +385,8 @@
 
   });
   if (listData) {
-    panel.querySelector('[data-caption]').textContent = listData.archiveWarning || ('Kaydedilen liste · ' + listData.filename + (listData.archiveNotice ? ' · ' + listData.archiveNotice : ' · Arşiv tarihindeki durum'));
+    panel.querySelector('[data-caption]').textContent = (listData.archiveWarning ? localize(listData.archiveWarning) :
+      localize('Kaydedilen liste · ' + listData.filename) + ' · ' + localize(listData.archiveNotice || 'Arşiv tarihindeki durum'));
     panel.querySelector('[data-caption]').classList.toggle('error', Boolean(listData.archiveWarning));
   }
   refreshLists();
@@ -418,7 +464,7 @@
     if (running || loading) return;
     clearListMemory();
     panel.querySelector('[data-zip]').value = '';
-    panel.querySelector('[data-caption]').textContent = 'Liste hafızası silindi. Korunan ve dondurulmuş hesaplar saklandı. ZIP yükleyebilirsin.';
+    panel.querySelector('[data-caption]').textContent = localize('Liste hafızası silindi. Korunan ve dondurulmuş hesaplar saklandı. ZIP yükleyebilirsin.');
     panel.querySelector('[data-caption]').classList.remove('error');
     lockControls();
   };
@@ -433,13 +479,13 @@
     lockControls();
     const caption = panel.querySelector('[data-caption]'); caption.classList.remove('error');
     const results = panel.querySelector('[data-results]');
-    results.textContent = 'ZIP okunuyor…';
+    results.textContent = localize('ZIP okunuyor…');
     panel.querySelector('[data-manual] textarea').value = '';
     total = 0; completed = 0; elapsedOperations = 0;
     updateEstimate();
     try {
       const zip = await Promise.race([readInstagramZip(file), new Promise((resolve, reject) => setTimeout(() => reject(new Error('ZIP okuma 30 saniyede tamamlanamadı. Dosyayı yeniden seç.')), 30000))]);
-      results.textContent = 'Takipçi listeleri karşılaştırılıyor…';
+      results.textContent = localize('Takipçi listeleri karşılaştırılıyor…');
       const files = Object.keys(zip.files).filter(name => !zip.files[name].dir);
       const followerFiles = files.filter(name => /(^|\/)followers(_\d+)?\.json$/.test(name));
       const followingFiles = files.filter(name => /(^|\/)following\.json$/.test(name));
@@ -467,7 +513,10 @@
       }
       for (const row of rows(JSON.parse(await zip.files[followingFiles[0]].async('string')))) {
         const item = entry(row);
-        following.set(item.name, item);
+        const previous = following.get(item.name);
+        if (!previous) following.set(item.name, item);
+        else if (item.timestamp > previous.timestamp) following.set(item.name, {...item, photoUrl: item.photoUrl || previous.photoUrl});
+        else if (!previous.photoUrl) previous.photoUrl = item.photoUrl;
       }
       const followingTimes = [...following.values()].map(item => item.timestamp).filter(Boolean);
       const firstFollowing = followingTimes.length ? Math.min(...followingTimes) : 0;
@@ -480,14 +529,14 @@
       excluded = new Set();
       saveCache();
       const mutual = [...following.keys()].filter(name => followers.has(name)).length;
-      caption.textContent = archiveWarning
+      caption.textContent = localize(archiveWarning
         ? file.name + ' · ' + archiveWarning
-        : file.name + ` · Hafıza sıfırlandı · ${followers.size} takipçi · ${following.size} takip edilen · ${mutual} karşılıklı · ${unmatched.length} aday`;
+        : file.name + ` · Hafıza sıfırlandı · ${followers.size} takipçi · ${following.size} takip edilen · ${mutual} karşılıklı · ${unmatched.length} aday`);
       if (unmatched.some(item => followers.has(item.name))) throw new Error('Takipçi karşılaştırması doğrulanamadı.');
       caption.classList.toggle('error', Boolean(archiveNotice));
       refreshLists();
       report(archiveWarning || `${queueItems().length} hesap işlem listesinde. Yalnızca yeni ZIP karşılaştırıldı; korunan hesaplar hariç tutuldu.`);
-    } catch (error) { caption.textContent = error.message; caption.classList.add('error'); refreshLists(); }
+    } catch (error) { caption.textContent = localize(error.message); caption.classList.add('error'); refreshLists(); }
     finally { loading = false; lockControls(); }
   };
 
@@ -516,7 +565,7 @@
         if (mode === 'iframe') {
           report(`${username}: arka planda iframe açılıyor…`);
           const frame = document.createElement('iframe');
-          frame.title = 'Follow Studio işlem alanı';
+          frame.title = localize('Follow Studio işlem alanı');
           frame.setAttribute('aria-hidden', 'true');
           frame.tabIndex = -1;
           frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1100px;height:850px;opacity:0;pointer-events:none';
@@ -535,7 +584,7 @@
           job = storageGet(key, null);
           if (!job || job.id !== id) return {state: 'skipped', message: username + ': işlem kesildi; atlandı'};
           if (job.progress) connected = true;
-          if (job.progress && job.progress !== lastProgress) { report(`${username}: ${job.progress}`); lastProgress = job.progress; }
+          if (job.progress && job.progress !== lastProgress) { report(`${username}: ${localize(job.progress)}`); lastProgress = job.progress; }
           if (job.state !== 'running') break;
           // Fallback only before the iframe worker acknowledges; it has not clicked anything yet.
           if (mode === 'iframe' && !connected && Date.now() - started >= 12000) break;
@@ -574,6 +623,7 @@
         : [...new Set(panel.querySelector('[data-manual] textarea').value.split(/[\s,;]+/).filter(Boolean).map(parseName))].filter(name => !protectedNow(name) && eligibleNow(name) && !Object.prototype.hasOwnProperty.call(frozenAccounts, name));
     } catch (e) { report(e.message); return; }
     if (!usernames.length) { report(runList === 'frozen' ? 'Bu bölümde yeniden denenebilecek uygun hesap yok.' : 'İşlem listesi boş. ZIP yükle veya Elle kullanıcı listesi gir bölümünü aç.'); return; }
+    panel.querySelector('.activity').open = true;
     try {
       if (!await bridge.claim()) { report('Başka bir Instagram sekmesinde işlem sürüyor. Önce oradaki işlemi durdur.'); return; }
     } catch (error) { report(error.message); return; }
@@ -596,11 +646,20 @@
         if (!running) break;
         if (!eligibleNow(username)) { report(username + ': arşivde uygun aday değil; atlandı.'); completed++; recordOutcome({state:'skipped'}); updateEstimate(); continue; }
         if (protectedNow(username)) { report(username + ': korunan hesap, atlandı.'); completed++; recordOutcome({state: 'skipped', outcome: 'protected'}); updateEstimate(); continue; }
+        try {
+          await bridge.verifyCandidate(username);
+        } catch (error) {
+          if (!error.outcome) throw error;
+          report(`${username}: ${error.message}`);
+          completed++; recordOutcome({state: 'skipped', outcome: error.outcome}); updateEstimate();
+          continue;
+        }
+        if (!running) break;
         const operationStart = Date.now();
         const job = await runAccount(username);
         if (!running || !job) break;
         elapsedOperations += Date.now() - operationStart; completed++; recordOutcome(job); updateEstimate();
-        report(`${job.message} (${((Date.now() - operationStart) / 1000).toFixed(1)} sn)`);
+        report(`${localize(job.message)} (${((Date.now() - operationStart) / 1000).toFixed(1)} sn)`);
         if (job.state === 'done') {
           removeFromMain(username);
           delete frozenAccounts[username]; saveFrozen();
@@ -615,7 +674,7 @@
           while (running && Date.now() - waitingStart < Math.max(0, Number(panel.querySelector('#wait-seconds').value) || 0) * 1000) await sleep(100);
         }
       }
-    } catch (e) { report('Hata: ' + e.message); }
+    } catch (e) { report('Hata: ' + localize(e.message)); }
     finally { running = false; if (runSummary) { runSummary.finishedAt = Date.now(); storageSet('follow-studio-run-summary', runSummary); } total = 0; completed = 0; elapsedOperations = 0; refreshLists(); lockControls(); try { await bridge.release(); } catch (error) { report(error.message); } report('Çalışma sona erdi.'); }
   };
   async function readRelationshipArchive(file) {
@@ -650,10 +709,30 @@
       following: await namesFrom(followingFiles, 'relationships_following')};
   }
   FollowStudioQueue.attach(panel, refreshLists, readRelationshipArchive);
+  let profileDetailsRevision = 0;
+  async function refreshProfileDetails() {
+    const revision = ++profileDetailsRevision;
+    profileData = {};
+    if (veil.hidden) return;
+    try {
+      const data = await bridge.profileDetails();
+      if (revision !== profileDetailsRevision) return;
+      profileData = data;
+    } catch {}
+    if (revision === profileDetailsRevision) refreshLists(false);
+  }
+  veil.addEventListener('studio-visibility', refreshProfileDetails);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || veil.hidden) return;
+    const history = changes['follow-studio-follow-queue'];
+    if (changes['follow-studio-relationships'] || history?.oldValue?.history?.length !== history?.newValue?.history?.length) {
+      void refreshProfileDetails();
+    }
+  });
   if (await bridge.ready()) panel.querySelector('[data-open]').click();
 })().catch(error => {
   console.error('Follow Studio:', error.message);
   const host = document.querySelector('#ig-follow-manager');
   const status = host?.shadowRoot?.querySelector('[data-status]');
-  if (status) status.textContent = 'Hata: ' + error.message;
+  if (status) status.textContent = FollowStudioI18n.text('Hata: ' + FollowStudioI18n.text(error.message));
 });
