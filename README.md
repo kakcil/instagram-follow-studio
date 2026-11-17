@@ -178,9 +178,9 @@ Dates describe the interval **between two snapshots**, not the exact time or rea
 
 ## Unsend messages in one conversation
 
-Open the Instagram conversation, then select **Mesajlar** (Messages) in Follow Studio. Confirm that you want to unsend the messages you sent there for everyone and select **Mesajları geri al** (Unsend messages). Instagram applies the changes to the conversation, and the messages cannot be restored.
+In **Messages**, enter the other person's Instagram username. **Unsend messages and remove reactions** unsends messages you sent for everyone and removes reactions you added to the other person's messages. The reaction option is selected by default. Clear it to unsend messages only, or select **Remove reactions only** to keep the messages. **Check chat** looks for the selected action without changing the conversation. Follow Studio verifies the recipient before making changes. Unsent messages cannot be restored.
 
-The extension opens an inactive Instagram tab to do the work. You can close the original tab and check the job or select **Durdur** (Stop) from Follow Studio on another Instagram tab. If Instagram restricts the action or the last unsend cannot be confirmed, the job stops. The extension stores the conversation identifier and progress locally.
+When the main browser window is wide enough, Follow Studio places the Instagram work window beside it. Keep the work window visible while the job runs. You can switch tabs in the main window, check progress, or select **Durdur** (Stop) from another Instagram tab. Select **Çalışma penceresini göster** (Show work window) if the window is covered. Follow Studio restores the main window at the end if you have not moved or resized it. If Instagram restricts the action or the last unsend cannot be confirmed, the job stops. The extension stores the conversation identifier and progress locally.
 
 ## Need help?
 

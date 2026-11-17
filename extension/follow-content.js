@@ -304,6 +304,7 @@ globalThis.FollowStudioQueue = (() => {
       [data-follow-status]{text-align:right}
       .studio-transfer{display:flex;gap:6px;flex-wrap:wrap}
       .queue-actions{display:flex;gap:6px;margin:10px 0 14px}
+      #studio-view-messages .queue-actions{flex-wrap:wrap}
       .dialog .primary,.dialog .stop,.dialog .secondary{box-shadow:none;border-radius:7px}
       .dialog .primary{background:#ededed;border:1px solid #ededed;color:#161616;padding:6px 12px}
       .dialog .primary:hover{transform:none;background:#fff}
@@ -312,6 +313,8 @@ globalThis.FollowStudioQueue = (() => {
       .studio-queue summary{padding:9px 0;color:#dedede;font-weight:550}
       .studio-queue form{margin:0 0 10px}
       .studio-queue textarea{margin:0 0 6px}
+      [data-dm-username]{display:block;width:100%;margin:4px 0 10px;padding:7px;
+        background:#1e1e1e;color:#eee;border:1px solid #3b3b3b;border-radius:6px}
       .studio-queue [data-follow-import-result]:empty{display:none}
       #studio-follow-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
       #studio-follow-form label{display:grid;gap:3px;font-size:11px;color:#b5b5b5}

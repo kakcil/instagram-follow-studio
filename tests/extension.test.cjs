@@ -17,10 +17,15 @@ function unfollowRelationshipFixture({at = Date.now(), source = 'live', follower
   return {accounts: [{account: {id: '1001', storeId: '0'}, latest: {at, source, followers, following}}]};
 }
 
-function environment(initial = {}) {
+function environment(initial = {}, browserWindow) {
   const local = structuredClone(initial), session = {}, changes = [];
   const tabs = new Map([[1, {id: 1}], [2, {id: 2}]]), removed = [], updated = [];
   const documents = new Map();
+  const windows = [], backgroundDelays = [];
+  if (browserWindow) {
+    windows.push({...browserWindow});
+    tabs.get(1).windowId = browserWindow.id;
+  }
   let listener, created, next = 10;
   const event = list => ({addListener(fn) { list.push(fn); }});
   const area = (data, name) => ({
@@ -44,10 +49,29 @@ function environment(initial = {}) {
     },
     storage, runtime: {id: 'fixture-extension', onMessage: {addListener(fn) { listener = fn; }}},
     action: {onClicked: {addListener() {}}},
+    windows: {
+      async get(id) {
+        const window = windows.find(item => item.id === id);
+        if (!window) throw new Error('Missing window');
+        return {...window};
+      },
+      async create(options) {
+        const window = {id: 100 + windows.length, ...options};
+        windows.push(window);
+        const tab = await chrome.tabs.create({url: options.url, active: true, windowId: window.id});
+        return {...window, tabs: [tab]};
+      },
+      async update(id, options) {
+        const window = windows.find(item => item.id === id);
+        if (!window) throw new Error('Missing window');
+        return Object.assign(window, options);
+      }
+    },
     tabs: {
       async get(id) { if (!tabs.has(id)) throw new Error('Missing tab'); return tabs.get(id); },
       async create(options) { const tab = {id: next++, ...options}; tabs.set(tab.id, tab); created?.(tab); return tab; },
       async remove(id) { tabs.delete(id); },
+      async update(id, values) { return Object.assign(await this.get(id), values); },
       async reload(id) { documents.set(id, (documents.get(id) || 0) + 1); },
       onRemoved: event(removed), onUpdated: event(updated)
     }
@@ -65,13 +89,15 @@ function environment(initial = {}) {
   const alarms = [];
   chrome.alarms = {onAlarm: event(alarms), async create() {}, async clear() {}};
   chrome.runtime.onStartup = {addListener() {}};
-  const context = vm.createContext({chrome, URL, console, crypto: {randomUUID}});
+  const context = vm.createContext({chrome, URL, console, crypto: {randomUUID},
+    setTimeout(fn, ms) { backgroundDelays.push(ms); return setImmediate(fn); }});
   context.importScripts = filename => vm.runInContext(read(filename), context);
   vm.runInContext(read('background.js'), context);
   const send = (message, tabId = 1, frameId = 0, url = 'https://www.instagram.com/') => new Promise(resolve => {
-    listener(message, {id: chrome.runtime.id, tab: {id: tabId}, frameId, url, documentId: 'document-' + tabId + '-' + (documents.get(tabId) || 0)}, resolve);
+    listener(message, {id: chrome.runtime.id, tab: {id: tabId, windowId: tabs.get(tabId)?.windowId},
+      frameId, url, documentId: 'document-' + tabId + '-' + (documents.get(tabId) || 0)}, resolve);
   });
-  return {local, session, storage, send, tabs, updated, removed, alarms, powerCalls,
+  return {local, session, storage, send, tabs, updated, removed, alarms, powerCalls, windows, backgroundDelays,
     flushPower: () => vm.runInContext('powerUpdates', context),
     setStore(value) { cookieStoreId = value; },
     setAccount(value, notify = false) {
@@ -278,25 +304,41 @@ test('native extension UI works without Monkey and removes successful accounts',
 const dmQueueKey = 'follow-studio-dm-queue';
 const dmFixtureThread = 'https://www.instagram.com/direct/t/123456789/';
 
-test('the Messages tab requires the current thread and explicit confirmation, then opens an independent worker', async t => {
+test('the Messages tab defaults to unsending and removing reactions after the user presses Start', async t => {
   const env = environment();
-  const {dom, panel} = await app(env, dmFixtureThread, 1, 'en');
+  const {dom, panel} = await app(env, 'https://www.instagram.com/', 1, 'en');
   t.after(() => dom.window.close());
   panel.querySelector('[data-open]').click();
   panel.querySelector('#studio-tab-messages').click();
   await new Promise(resolve => setImmediate(resolve));
   const start = panel.querySelector('[data-dm-start]');
-  const confirmation = panel.querySelector('[data-dm-confirm]');
+  const username = panel.querySelector('[data-dm-username]');
+  const reactions = panel.querySelector('[data-dm-reactions]');
+  assert.equal(reactions.checked, true);
+  assert.equal(panel.querySelector('[data-dm-confirm]'), null);
   assert.equal(start.disabled, true);
-  assert.equal((await env.send({type: 'dm-start', confirmed: true})).ok, false, 'No conversation is open');
+  assert.equal((await env.send({type: 'dm-start', confirmed: true})).ok, false, 'No username was provided');
   assert.equal((await env.send({type: 'dm-start'}, 1, 0, dmFixtureThread)).ok, false);
   assert.equal(env.local[dmQueueKey], undefined);
-  confirmation.click();
+  username.value = '@Fixture_Target';
+  username.dispatchEvent(new dom.window.Event('input'));
   assert.equal(start.disabled, false);
+  assert.equal(start.textContent, 'Unsend messages and remove reactions');
   await start.onclick();
   const job = env.local[dmQueueKey];
-  assert.equal(env.tabs.get(job.tabId).active, false);
-  assert.equal(job.thread, '123456789');
+  const worker = env.tabs.get(job.tabId);
+  assert.equal(worker.active, true);
+  assert.equal(worker.autoDiscardable, false);
+  assert.equal(env.windows[0].type, 'popup');
+  assert.equal(env.windows[0].focused, false);
+  assert.equal(worker.windowId, env.windows[0].id);
+  assert.equal((await env.send({type: 'dm-show'}, 2)).ok, true);
+  assert.equal(env.windows[0].focused, true);
+  assert.equal(job.username, 'fixture_target');
+  assert.equal(job.options.messages, true);
+  assert.equal(job.options.reactions, true);
+  assert.match(env.tabs.get(job.tabId).url, /\/fixture_target\//);
+  assert.equal(job.thread, null);
   assert.equal(job.running, true);
   assert.match(panel.querySelector('[data-dm-status]').textContent, /Message job running in the background/);
 
@@ -312,7 +354,7 @@ test('the Messages tab requires the current thread and explicit confirmation, th
 
 test('a closed worker is replaced before an unsend but an interrupted confirmation is not replayed', async () => {
   const env = environment();
-  await env.send({type: 'dm-start', confirmed: true}, 1, 0, dmFixtureThread);
+  await env.send({type: 'dm-start', confirmed: true, username: 'fixture_target'});
   const first = env.local[dmQueueKey];
   async function close(tabId) {
     env.tabs.delete(tabId);
@@ -323,10 +365,13 @@ test('a closed worker is replaced before an unsend but an interrupted confirmati
   const worker = env.local[dmQueueKey];
   assert.notEqual(worker.tabId, first.tabId);
   assert.equal(worker.id, first.id);
-  const url = env.tabs.get(worker.tabId).url;
-  assert.equal((await env.send({type: 'dm-resume'}, worker.tabId, 0, 'https://www.instagram.com/direct/t/999/')).ok, false);
+  const url = dmFixtureThread;
+  env.tabs.get(worker.tabId).url = url;
   assert.equal((await env.send({type: 'dm-commit', id: worker.id}, worker.tabId, 0, url)).ok, false);
   assert.equal((await env.send({type: 'dm-resume'}, worker.tabId, 0, url)).id, worker.id);
+  assert.equal((await env.send({type: 'dm-bind', id: worker.id, username: 'wrong'}, worker.tabId, 0, url)).ok, false);
+  assert.equal((await env.send({type: 'dm-bind', id: worker.id, username: 'fixture_target'}, worker.tabId, 0, url)).ok, true);
+  assert.equal((await env.send({type: 'dm-resume'}, worker.tabId, 0, 'https://www.instagram.com/direct/t/999/')).ok, false);
   assert.equal((await env.send({type: 'dm-commit', id: worker.id}, worker.tabId, 0, url)).ok, true);
   await close(worker.tabId);
   assert.equal(env.local[dmQueueKey].running, false);
@@ -336,14 +381,20 @@ test('a closed worker is replaced before an unsend but an interrupted confirmati
 });
 
 async function runDmWorker(env, t, variant) {
-  await env.send({type: 'dm-start', confirmed: true}, 1, 0, dmFixtureThread);
+  const reactions = variant === 'reaction' || variant === 'reaction-preview';
+  await env.send({type: 'dm-start', confirmed: !reactions, removeReactions: reactions,
+    preview: variant === 'preview-menu' || variant === 'reaction-preview', username: 'fixture_target'});
   const job = env.local[dmQueueKey];
-  const url = env.tabs.get(job.tabId).url;
-  const dom = new JSDOM(`<html lang="en"><body><main data-pagelet="IGDMessagesList">
+  const url = dmFixtureThread;
+  const profileUrl = env.tabs.get(job.tabId).url;
+  env.tabs.get(job.tabId).url = url;
+  const chat = `<main><div><a aria-label="Open the profile page of target" href="/${variant === 'wrong' ? 'another_person' : 'fixture_target'}/">Profile</a></div><div data-pagelet="IGDMessagesList">
     <div role="row" id="incoming"><button aria-label="More options">⋯</button></div>
     <div role="row" id="outgoing" style="display:flex;justify-content:flex-end">
       <button aria-label="See more options for message">⋯</button>
-    </div></main></body></html>`, {url, runScripts: 'outside-only'});
+    </div></div></main>`;
+  const dom = new JSDOM(`<html lang="en"><body>${chat}</body></html>`,
+    {url, runScripts: 'outside-only', pretendToBeVisual: variant !== 'hidden'});
   t.after(() => dom.window.close());
   const w = dom.window;
   const outgoing = w.document.getElementById('outgoing');
@@ -355,9 +406,32 @@ async function runDmWorker(env, t, variant) {
   let cancelClicks = 0;
   let incomingClicks = 0;
   let confirmations = 0;
+  let reactionRemovals = 0;
   w.document.querySelector('#incoming button').onclick = () => incomingClicks++;
   const more = outgoing.querySelector('button');
-  function openMessageActions() {
+  let upwardMoves = 0;
+  if (variant === 'reverse-scroll') {
+    const list = w.document.querySelector('[data-pagelet="IGDMessagesList"]');
+    const oldest = outgoing.cloneNode(true);
+    const scroller = w.document.createElement('div');
+    scroller.style.cssText = 'overflow-y:scroll;display:flex;flex-direction:column-reverse';
+    scroller.append(...list.children);
+    list.append(scroller);
+    let top = 0;
+    Object.defineProperties(scroller, {
+      clientHeight: {get: () => 100},
+      scrollHeight: {get: () => confirmations ? 400 : 100},
+      scrollTop: {get: () => top, set: value => {
+        if (value < top) upwardMoves++;
+        top = value;
+        if (upwardMoves === 1 && !oldest.isConnected && confirmations === 1) {
+          oldest.querySelector('button').onclick = () => openMessageActions(oldest);
+          scroller.append(oldest);
+        }
+      }}
+    });
+  }
+  function openMessageActions(row) {
     const instagramPopover = variant === 'instagram-popover';
     const menu = w.document.createElement('div');
     menu.setAttribute('role', instagramPopover ? 'dialog' : 'menu');
@@ -375,25 +449,90 @@ async function runDmWorker(env, t, variant) {
       unsend.onclick = () => {
         confirmations++;
         dialog.remove();
-        outgoing.remove();
+        row.remove();
+        if (variant === 'rerender' && confirmations === 1) {
+          const list = w.document.querySelector('[data-pagelet="IGDMessagesList"]');
+          const replacement = list.cloneNode(true);
+          const older = outgoing.cloneNode(true);
+          older.querySelector('button').onclick = () => openMessageActions(older);
+          replacement.append(older);
+          list.replaceWith(replacement);
+        }
       };
       w.document.body.append(dialog);
     };
     w.document.body.append(menu);
   }
   if (variant === 'instagram-popover') {
-    more.onkeydown = event => { if (event.key === 'Enter') openMessageActions(); };
+    more.onkeydown = event => { if (event.key === 'Enter') openMessageActions(outgoing); };
   } else {
-    more.onclick = openMessageActions;
+    more.onclick = () => openMessageActions(outgoing);
   }
   if (variant === 'restricted') {
     w.document.body.insertAdjacentHTML('beforeend', '<div role="alert">Try again later</div>');
   }
-  w.chrome = {runtime: {sendMessage: message => env.send(message, job.tabId, 0, url)}};
+  if (reactions) {
+    const incoming = w.document.getElementById('incoming');
+    incoming.innerHTML = '<div aria-roledescription="message">Synthetic incoming</div>' +
+      '<svg aria-label="See more options for message from fixture_target"></svg><div role="button">❤️😂</div>';
+    const badge = incoming.querySelector('[role="button"]');
+    badge.onclick = () => {
+      const dialog = w.document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      dialog.innerHTML = '<h2>Reactions</h2><button>Close</button><button>Other person 😂</button>' +
+        (reactionRemovals ? '' : '<div role="button"><span>Me</span><span>Select to remove</span><span>❤️</span></div>');
+      const [close, other, own] = dialog.querySelectorAll('button,[role="button"]');
+      close.onclick = () => dialog.remove();
+      other.onclick = () => assert.fail('Someone else’s reaction was selected');
+      if (own) own.onclick = () => {
+        assert.equal(env.local[dmQueueKey].operation, 'reaction');
+        reactionRemovals++;
+        badge.textContent = '😂';
+        dialog.remove();
+      };
+      w.document.body.append(dialog);
+    };
+  }
+  if (variant === 'skip-menu') {
+    const blocked = outgoing.cloneNode(true);
+    blocked.removeAttribute('id');
+    blocked.querySelector('button').onclick = () => {
+      const menu = w.document.createElement('div');
+      menu.setAttribute('role', 'menu');
+      menu.innerHTML = '<button>Copy</button>';
+      w.document.body.append(menu);
+      w.document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') menu.remove();
+      }, {once: true});
+    };
+    outgoing.after(blocked);
+  }
+  if (variant === 'rerender') {
+    const chatPage = w.document.querySelector('main');
+    env.tabs.get(job.tabId).url = profileUrl;
+    w.history.replaceState(null, '', profileUrl);
+    w.document.body.innerHTML = '<main><header><h2>fixture_target</h2><button>Message</button></header></main>';
+    w.document.querySelector('button').onclick = () => {
+      const popup = w.document.createElement('div');
+      popup.innerHTML = '<div><div role="button"><svg aria-label="Expand"></svg></div><div role="button"><svg aria-label="Close"></svg></div></div><div contenteditable="true"></div>';
+      popup.querySelector('[role="button"]').onclick = () => {
+        assert.equal(env.local[dmQueueKey].pending, false);
+        w.history.pushState(null, '', url);
+        env.tabs.get(job.tabId).url = url;
+        w.document.body.replaceChildren(chatPage);
+      };
+      w.document.body.append(popup);
+    };
+  }
+  w.chrome = {runtime: {sendMessage: message => {
+    if (message.type === 'dm-delay') elapsed += message.ms;
+    return env.send(message, job.tabId, 0, variant === 'rerender' ? profileUrl : w.location.href);
+  }}};
   w.eval(read('i18n.js'));
   w.eval(read('dm-content.js'));
   await w.eval(read('content.js'));
-  return {cancelClicks, incomingClicks, confirmations};
+  if (reactions) return {confirmations, reactionRemovals};
+  return variant === 'reverse-scroll' ? {confirmations, upwardMoves} : {cancelClicks, incomingClicks, confirmations};
 }
 
 test('the worker confirms only the Instagram Unsend button, leaves incoming messages alone, and stops on restrictions', async t => {
@@ -407,12 +546,92 @@ test('the worker confirms only the Instagram Unsend button, leaves incoming mess
   assert.match(restricted.local[dmQueueKey].status, /kısıtlama/);
 });
 
+test('checking a chat finds the live-style Unsend menu without activating it', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'preview-menu')).confirmations, 0);
+  assert.equal(env.local[dmQueueKey].count, 0);
+  assert.equal(env.local[dmQueueKey].pending, false);
+  assert.match(env.local[dmQueueKey].status, /Geri Al menüsü doğrulandı/);
+});
+
+test('the reaction option removes only the signed-in user’s reaction and verifies the remaining reaction', async t => {
+  const env = environment();
+  assert.deepEqual(await runDmWorker(env, t, 'reaction'), {confirmations: 0, reactionRemovals: 1});
+  assert.equal(env.local[dmQueueKey].count, 0);
+  assert.equal(env.local[dmQueueKey].reactions, 1);
+  const preview = environment();
+  assert.deepEqual(await runDmWorker(preview, t, 'reaction-preview'), {confirmations: 0, reactionRemovals: 0});
+  assert.match(preview.local[dmQueueKey].status, /kaldırma seçeneği doğrulandı/);
+});
+
 test('the worker finds Instagram’s dialog popover, nested Unsend label and separate confirmation after keyboard activation', async t => {
   const env = environment();
   assert.deepEqual(await runDmWorker(env, t, 'instagram-popover'),
     {cancelClicks: 0, incomingClicks: 0, confirmations: 1});
   assert.equal(env.local[dmQueueKey].count, 1);
   assert.equal(env.local[dmQueueKey].running, false);
+});
+
+test('the message worker opens the full thread from a profile chat popup, verifies the recipient and keeps going after rerender', async t => {
+  const wrong = environment();
+  assert.equal((await runDmWorker(wrong, t, 'wrong')).confirmations, 0);
+  assert.match(wrong.local[dmQueueKey].status, /doğrulanamadı/);
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'rerender')).confirmations, 2);
+  assert.equal(env.local[dmQueueKey].count, 2);
+  assert.equal(env.local[dmQueueKey].status, 'Mesaj işlemi tamamlandı.');
+});
+
+test('the worker scrolls a reversed message viewport that starts without overflow and handles older loaded messages', async t => {
+  const env = environment();
+  const result = await runDmWorker(env, t, 'reverse-scroll');
+  assert.ok(result.upwardMoves >= 2);
+  assert.equal(result.confirmations, 2);
+  assert.equal(env.local[dmQueueKey].count, 2);
+  assert.equal(env.local[dmQueueKey].status, 'Mesaj işlemi tamamlandı.');
+});
+
+test('checking a chat can bind the current tab but cannot commit an unsend', async () => {
+  const env = environment();
+  assert.equal((await env.send({type: 'dm-start', preview: true, username: 'fixture_target'})).ok, true);
+  const job = env.local[dmQueueKey];
+  const profileUrl = env.tabs.get(job.tabId).url;
+  env.tabs.get(job.tabId).url = dmFixtureThread;
+  const send = (type, data = {}) => env.send({type, id: job.id, ...data}, job.tabId, 0, profileUrl);
+  assert.equal((await send('dm-bind', {username: 'fixture_target'})).preview, true);
+  assert.equal((await send('dm-check')).ok, true);
+  assert.equal((await send('dm-commit')).ok, false);
+  assert.equal((await send('dm-finish', {scrolled: true})).ok, true);
+  assert.equal(env.local[dmQueueKey].count, 0);
+});
+
+test('a missing Unsend option skips that row, continues and leaves the worker open for review', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'skip-menu')).confirmations, 1);
+  assert.equal(env.local[dmQueueKey].count, 1);
+  assert.match(env.local[dmQueueKey].status, /1 mesaj geri alınamadı/);
+  assert.equal(env.tabs.size, 3);
+});
+
+test('a hidden worker uses background waits and still verifies a message removal', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'hidden')).confirmations, 1);
+  assert.ok(env.backgroundDelays.includes(650), 'The removal verification wait ran in the extension service worker');
+  assert.ok(env.backgroundDelays.includes(1400), 'The scroll wait ran in the extension service worker');
+  assert.equal(env.local[dmQueueKey].count, 1);
+});
+
+test('the work window stays beside Brave without taking focus and restores the previous layout on stop', async () => {
+  const original = {id: 70, type: 'normal', state: 'maximized', left: 0, top: 0, width: 1600, height: 900};
+  const env = environment({}, original);
+  assert.equal((await env.send({type: 'dm-start', preview: true, username: 'fixture_target'})).ok, true);
+  const [main, worker] = env.windows;
+  assert.equal(main.state, 'normal');
+  assert.equal(main.left + main.width, worker.left);
+  assert.equal(worker.left + worker.width, original.width);
+  assert.equal(worker.focused, false);
+  assert.equal((await env.send({type: 'dm-stop'}, 1)).ok, true);
+  assert.equal(main.state, 'maximized');
 });
 
 test('background owns worker tabs, rejects concurrent controllers, rechecks follower/protection before clicks', async () => {
