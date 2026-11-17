@@ -5,16 +5,15 @@ globalThis.FollowStudioRelationships = (() => {
   const stateKey = 'follow-studio-relationships';
   const jobKey = 'follow-studio-relationship-job';
   const normalize = text => (text || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/i\u0307/g, 'i');
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const reserved = new Set(['accounts', 'explore', 'direct', 'reels', 'stories', 'p', 'reel', 'about', 'challenge']);
   const visible = el => el.getClientRects().length && !el.closest('[hidden],[aria-hidden="true"]');
-  const fail = code => { throw Object.assign(new Error(code), {code}); };
   async function send(type, data = {}) {
     const response = await chrome.runtime.sendMessage({type, ...data});
     if (!response?.ok) throw new Error(response?.error || 'Tarama bağlantısı kurulamadı.');
     return response;
   }
   function usernameFromLink(link) {
+    if (!link) return;
     try {
       const url = new URL(link.href, location.href);
       if (url.origin !== location.origin) return;
@@ -30,175 +29,46 @@ globalThis.FollowStudioRelationships = (() => {
         (new URL(el.getAttribute('href') || '/', location.href).pathname.startsWith('/accounts/edit') ||
          ['edit profile', 'profili düzenle'].includes(normalize(el.textContent))));
   }
-  function listLink(username, kind) {
-    const main = document.querySelector('main,[role="main"]');
-    if (!main) return;
-    const links = [...main.querySelectorAll('a[href],button,[role="link"]')].filter(visible);
-    const direct = links.filter(link => {
-      const href = link.getAttribute('href');
-      if (!href) return false;
-      const url = new URL(href, location.href);
-      return url.origin === location.origin &&
-        url.pathname.toLowerCase().replace(/\/$/, '') === '/' + username + '/' + kind;
-    });
-    if (direct.length === 1) return direct[0];
-    const names = kind === 'followers' ? ['followers', 'takipçi', 'takipçiler'] :
-      ['following', 'takip', 'takip edilen', 'takip edilenler', 'takip ediliyor'];
-    const labelled = links.filter(link => {
-      const label = normalize(link.getAttribute('aria-label') || link.textContent)
-        .replace(/\d[\d.,\s\u00a0]*\d|\d/g, '').trim();
-      if (!names.includes(label)) return false;
-      try { exactCount(link); return true; } catch { return false; }
-    });
-    if (labelled.length === 1) return labelled[0];
-  }
-  function exactCount(link) {
-    if (!link) fail('page');
-    const sources = [link, ...link.querySelectorAll('[title],[aria-label]')]
-      .flatMap(el => [el.getAttribute('title'), el.getAttribute('aria-label')]);
-    sources.push(link.textContent);
-    for (const raw of sources) {
-      if (!raw || /\d[\d.,]*\s*(k|m|b|bin|mn|milyon)(?:\s|$)/i.test(raw)) continue;
-      const groups = raw.match(/\d[\d.,\s\u00a0]*\d|\d/g);
-      if (groups?.length !== 1) continue;
-      const value = groups[0].trim();
-      if (!/^(?:\d+|\d{1,3}(?:[.,\s\u00a0]\d{3})+)$/.test(value)) continue;
-      const number = Number(value.replace(/[.,\s\u00a0]/g, ''));
-      if (Number.isSafeInteger(number)) return number;
+  function observePhotos(accepts, onPhotos) {
+    const observed = new Map();
+    const pending = new Map();
+    let timer;
+
+    function capture(image) {
+      if (!image.complete || image.naturalWidth < 16 || image.naturalWidth !== image.naturalHeight ||
+          !image.getClientRects().length || image.closest('[hidden]')) return;
+      const alt = image.alt.match(/^([a-z0-9._]{1,30})(?:['’]s profile picture| profil (?:fotoğrafı|resmi))$/i);
+      const altName = alt?.[1].toLowerCase();
+      const linkName = usernameFromLink(image.closest('a[href]'));
+      if (altName && linkName && altName !== linkName) return;
+      const name = altName || linkName;
+      const src = image.currentSrc || image.src;
+      if (!name || !accepts(name) || !src || observed.get(name) === src) return;
+      observed.set(name, src);
+      pending.set(name, src);
+      if (timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        onPhotos(Object.fromEntries(pending));
+        pending.clear();
+      }, 200);
     }
-    fail('incomplete');
-  }
-  function dialog() {
-    const dialogs = [...document.querySelectorAll('[role="dialog"],dialog[open]')].filter(visible);
-    if (dialogs.length === 1) return dialogs[0];
-  }
-  function profileLinks(scope) {
-    const suggestion = [...scope.querySelectorAll('h1,h2,h3,h4,span,div,[role="heading"]')].find(el =>
-      ['suggested for you', 'senin için önerilenler', 'sana önerilenler', 'suggested'].includes(normalize(el.textContent)));
-    return [...scope.querySelectorAll('a[href]')].filter(link => visible(link) && usernameFromLink(link) &&
-      (!suggestion || Boolean(link.compareDocumentPosition(suggestion) & Node.DOCUMENT_POSITION_FOLLOWING)));
-  }
-  function profilePhoto(link, scope, username) {
-    for (let row = link; row && row !== scope; row = row.parentElement) {
-      if ([...row.querySelectorAll('a[href]')].some(anchor => {
-        const name = usernameFromLink(anchor);
-        return name && name !== username;
-      })) return;
-      const images = row.querySelectorAll('img[src]');
-      if (images.length === 1) return images[0].currentSrc || images[0].src;
-      if (images.length > 1) return;
-    }
-  }
-  function scrollContainer(scope) {
-    return [scope, ...scope.querySelectorAll('div,ul,[role="list"]')].filter(el =>
-      el.scrollHeight > el.clientHeight + 3 && el.clientHeight > 0 &&
-      /auto|scroll/.test(getComputedStyle(el).overflowY)).sort((a, b) =>
-      profileLinks(b).length - profileLinks(a).length || a.clientHeight - b.clientHeight)[0];
-  }
-  async function waitFor(read, id, timeout = 30_000) {
-    const end = Date.now() + timeout;
-    while (Date.now() < end) {
-      await send('relationships-check', {id});
-      const result = read();
-      if (result) return result;
-      await sleep(1000);
-    }
-    fail('page');
-  }
-  async function scanList(username, kind, expected, id, photos) {
-    if (expected === 0) return [];
-    const link = listLink(username, kind);
-    if (!link) fail('page');
-    await send('relationships-check', {id});
-    link.click();
-    await waitFor(dialog, id);
-    const seen = new Set();
-    const started = Date.now();
-    let lastGrowth = started;
-    while (Date.now() - started < 2 * 60 * 60_000) {
-      await send('relationships-check', {id});
-      const scope = dialog();
-      if (!scope) fail('page');
-      const before = seen.size;
-      for (const row of profileLinks(scope)) {
-        const name = usernameFromLink(row);
-        seen.add(name);
-        if (!photos.has(name)) {
-          const photo = profilePhoto(row, scope, name);
-          if (photo) photos.set(name, photo);
-        }
-      }
-      if (seen.size > expected) fail('counts_changed');
-      await send('relationships-progress', {id, list: kind, seen: seen.size, total: expected});
-      if (seen.size === expected) return [...seen];
-      if (seen.size > before) lastGrowth = Date.now();
-      const emptyNotice = normalize(scope.textContent).includes("you'll see all the people who follow you here.");
-      if (kind === 'followers' && !seen.size && emptyNotice && Date.now() - started >= 6000) fail('unavailable');
-      if (Date.now() - lastGrowth >= 60_000) fail('incomplete');
-      const scroller = scrollContainer(scope);
-      if (scroller) scroller.scrollTop += Math.max(200, scroller.clientHeight * 0.8);
-      await sleep(2500);
-    }
-    fail('incomplete');
-  }
-  async function closeDialog(id) {
-    const scope = dialog();
-    if (!scope) fail('page');
-    const close = [...scope.querySelectorAll('button,[role="button"]')].find(el => {
-      const label = normalize(el.getAttribute('aria-label') || el.textContent || el.querySelector('svg')?.getAttribute('aria-label'));
-      return visible(el) && ['close', 'kapat'].includes(label);
-    });
-    if (close) {
-      await send('relationships-check', {id});
-      close.click();
-    } else {
-      const focused = document.activeElement;
-      (focused && scope.contains(focused) ? focused : scope).dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true
-      }));
-    }
-    await waitFor(() => !dialog(), id, 5000);
-  }
-  async function work(id) {
-    try {
-      const {username} = await send('relationships-check', {id});
-      if (dialog()) await closeDialog(id);
-      await waitFor(() => listLink(username, 'followers') && listLink(username, 'following'), id);
-      if (!ownProfile(username)) fail('not_owner');
-      const counts = {followers: exactCount(listLink(username, 'followers')),
-        following: exactCount(listLink(username, 'following'))};
-      await sleep(1500);
-      await send('relationships-check', {id});
-      if (counts.followers !== exactCount(listLink(username, 'followers')) ||
-          counts.following !== exactCount(listLink(username, 'following'))) fail('counts_changed');
-      const photos = new Map();
-      const followers = await scanList(username, 'followers', counts.followers, id, photos);
-      if (counts.followers) await closeDialog(id);
-      const following = await scanList(username, 'following', counts.following, id, photos);
-      if (counts.following) await closeDialog(id);
-      await sleep(1500);
-      await send('relationships-check', {id});
-      if (!ownProfile(username)) fail('not_owner');
-      if (counts.followers !== exactCount(listLink(username, 'followers')) ||
-          counts.following !== exactCount(listLink(username, 'following'))) fail('counts_changed');
-      await send('relationships-result', {id, counts, followers, following, photos: Object.fromEntries(photos), ownerConfirmed: true});
-    } catch (error) {
-      try { await send('relationships-error', {id, code: error.code || 'page'}); } catch {}
-    }
+
+    document.addEventListener('load', event => {
+      if (event.target instanceof HTMLImageElement) capture(event.target);
+    }, true);
+    return () => { for (const image of document.images) capture(image); };
   }
 
   function createView(panel, readArchive) {
     const view = document.createElement('section');
     view.innerHTML = `
       <p class="manual-hint">Takipçilerini ve takip ettiklerini kaydet. Sonraki kontrolde listeler karşılaştırılır.</p>
-      <form data-relationship-form>
-        <label>Instagram kullanıcı adın <input name="username" type="text" autocomplete="off" spellcheck="false" placeholder="@kullanici" required></label>
-        <div class="queue-actions"><button type="submit" class="primary" data-relationship-start>İlk kaydı oluştur</button>
-          <button type="button" class="stop" data-relationship-stop disabled>Durdur</button></div>
-      </form>
+      <p class="manual-hint">Otomatik canlı tarama kapatıldı.</p>
       <details data-relationship-archive><summary>Instagram JSON arşivinden kayıt al</summary>
         <p class="manual-hint">Instagram arşivini JSON biçiminde, tüm zamanlar seçili ve takipçiler ile takip edilenler dahil olacak şekilde indir. Hazırlanma tarihi kaydın tarihi olarak kullanılır.</p>
         <form data-relationship-import>
+          <label>Instagram kullanıcı adın <input name="username" type="text" autocomplete="off" spellcheck="false" placeholder="@kullanici" required></label>
           <label>Instagram ZIP dosyası <input type="file" name="archive" accept=".zip" required></label>
           <label>Arşivin hazırlanma tarihi <input type="datetime-local" name="archiveDate" required></label>
           <label><input type="checkbox" name="allTime" required> Bu arşiv kendi hesabıma ait. Tüm zamanları ve iki tam listeyi içeriyor.</label>
@@ -227,9 +97,8 @@ globalThis.FollowStudioRelationships = (() => {
     `;
     panel.append(style);
     const find = selector => view.querySelector(selector);
-    const form = find('form');
-    const input = form.elements.username;
     const importForm = find('[data-relationship-import]');
+    const input = importForm.elements.username;
     const status = find('[data-relationship-status]');
     const date = time => new Date(time).toLocaleString(locale());
     let revision = 0;
@@ -262,14 +131,6 @@ globalThis.FollowStudioRelationships = (() => {
       find('[data-relationship-events]').replaceChildren(...rows);
       find('[data-relationship-more]').hidden = events.length <= visibleEvents;
     }
-    function renderJob(job) {
-      find('[data-relationship-start]').disabled = Boolean(job?.running);
-      input.disabled = Boolean(job?.running);
-      for (const control of importForm.elements) control.disabled = Boolean(job?.running);
-      find('[data-relationship-stop]').disabled = !job?.running;
-      find('[data-relationship-start]').textContent = localize(saved ? 'Değişiklikleri kontrol et' : 'İlk kaydı oluştur');
-      status.textContent = localize(job?.status || 'Hazır') + (job?.running && job.total != null ? ' ' + job.seen + ' / ' + job.total : '');
-    }
     async function refresh() {
       const current = ++revision;
       if (!isOpen()) return;
@@ -277,10 +138,9 @@ globalThis.FollowStudioRelationships = (() => {
         const response = await send('relationships-state');
         if (current !== revision || !isOpen()) return;
         saved = response.saved;
-        const job = response.job;
         if (!input.value) input.value = saved?.username || guessUsername();
         account = response.account;
-        renderJob(job);
+        status.textContent = localize(response.job?.status || 'Hazır');
         find('[data-relationship-summary]').textContent = saved ?
           localize((saved.latest.source === 'archive' ? 'Arşiv tarihi ' : 'Son kayıt ') + date(saved.latest.at)) +
           ' · ' + localize(saved.latest.followers + ' takipçi · ' + saved.latest.following + ' takip edilen') : '';
@@ -307,12 +167,6 @@ globalThis.FollowStudioRelationships = (() => {
       return ownLink ? usernameFromLink(ownLink) : '';
     }
     input.value = guessUsername();
-    form.onsubmit = async event => {
-      event.preventDefault();
-      find('[data-relationship-start]').disabled = true;
-      try { await send('relationships-start', {username: input.value.trim()}); await refresh(); }
-      catch (error) { status.textContent = localize(error.message); find('[data-relationship-start]').disabled = false; }
-    };
     importForm.onsubmit = async event => {
       event.preventDefault();
       const result = find('[data-relationship-import-status]');
@@ -326,8 +180,6 @@ globalThis.FollowStudioRelationships = (() => {
         return;
       }
       for (const control of importForm.elements) control.disabled = true;
-      find('[data-relationship-start]').disabled = true;
-      input.disabled = true;
       result.textContent = localize('Arşiv yerel olarak okunuyor…');
       try {
         const lists = await readArchive(file);
@@ -337,13 +189,8 @@ globalThis.FollowStudioRelationships = (() => {
       } catch (error) { result.textContent = localize(error.message); }
       finally {
         for (const control of importForm.elements) control.disabled = false;
-        find('[data-relationship-start]').disabled = false;
-        input.disabled = false;
         await refresh();
       }
-    };
-    find('[data-relationship-stop]').onclick = async () => {
-      try { await send('relationships-stop'); await refresh(); } catch (error) { status.textContent = localize(error.message); }
     };
     find('select').onchange = () => { visibleEvents = 200; renderEvents(); };
     find('[data-relationship-more]').onclick = () => { visibleEvents += 200; renderEvents(); };
@@ -355,12 +202,9 @@ globalThis.FollowStudioRelationships = (() => {
     }
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !isOpen()) return;
-      const job = changes[jobKey]?.newValue;
-      if (changes[stateKey] || (changes[jobKey] && (!job?.running || !account ||
-          job.account?.id !== account.id || job.account?.storeId !== account.storeId))) void refresh();
-      else if (job) renderJob(job);
+      if (changes[stateKey] || changes[jobKey]) void refresh();
     });
     return view;
   }
-  return {work, createView};
+  return {createView, observePhotos};
 })();

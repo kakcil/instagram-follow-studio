@@ -61,7 +61,7 @@ globalThis.FollowStudioBridge = {
         return {close: () => message({type: 'studio-close-worker', tabId})};
       },
       async ready() { return (await message({type: 'studio-ready'})).open; },
-      async profileDetails() { return message({type: 'studio-profile-details'}); }
+      async profileDetails(photos) { return message({type: 'studio-profile-details', photos}); }
     };
   }
 };

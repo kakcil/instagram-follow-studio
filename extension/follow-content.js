@@ -200,13 +200,16 @@ globalThis.FollowStudioQueue = (() => {
     tabs.setAttribute('role', 'tablist');
     tabs.setAttribute('aria-label', localize('Follow Studio araçları'));
     const relationshipView = FollowStudioRelationships.createView(panel, readArchive);
+    const messagesView = FollowStudioMessages.createView(panel);
     const modules = [
       {id: 'follow', title: 'Toplu takip', view: section,
         icon: '<path d="M4 6h10m-10 6h7m-7 6h10m4-9v8m-4-4h8"/>'},
       {id: 'unfollow', title: 'Takipten çık', view: legacy,
         icon: '<circle cx="9" cy="7" r="3"/><path d="M3 19v-2a4 4 0 0 1 4-4h4m3 2h7"/>'},
       {id: 'relationships', title: 'Takipleşme', view: relationshipView,
-        icon: '<path d="M3 12a9 9 0 1 0 3-6M3 3v6h6m3-2v5l3 2"/>'}
+        icon: '<path d="M3 12a9 9 0 1 0 3-6M3 3v6h6m3-2v5l3 2"/>'},
+      {id: 'messages', title: 'Mesajlar', view: messagesView,
+        icon: '<path d="M4 5h16v11H9l-5 3zM8 9h8m-8 3h6"/>'}
     ].map(module => {
       const {id, title, view, icon} = module;
       const tab = document.createElement('button');
@@ -245,6 +248,7 @@ globalThis.FollowStudioQueue = (() => {
         else legacy.querySelector('[data-results]').replaceChildren();
       }
       relationshipView.dispatchEvent(new Event('studio-view-change'));
+      messagesView.dispatchEvent(new Event('studio-view-change'));
     }
     modules.forEach((module, index) => {
       module.tab.onclick = () => selectModule(module);

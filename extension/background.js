@@ -2,11 +2,13 @@
 
 const jobKey = 'local-unfollow-job';
 const sessionKey = 'follow-studio-session';
+const photoCacheKey = 'follow-studio-observed-photos';
 const unfollowScanMaxAge = 10 * 60 * 1000;
 const newSession = () => ({owner: null, workers: {}, pendingOpen: {}});
 let operations = Promise.resolve();
 importScripts('follow-queue.js');
 importScripts('relationships.js');
+importScripts('dm-queue.js');
 
 function instagram(url) {
   try { return new URL(url).origin === 'https://www.instagram.com'; } catch { return false; }
@@ -15,21 +17,41 @@ async function session() { return (await chrome.storage.session.get(sessionKey))
 async function save(state) { await chrome.storage.session.set({[sessionKey]: state}); }
 async function alive(tabId) { try { await chrome.tabs.get(tabId); return true; } catch { return false; } }
 
-async function unfollowSnapshot(sender, verification) {
-  const account = await senderFollowAccount(sender);
-  const data = (await chrome.storage.local.get(relationshipsKey))[relationshipsKey];
-  const snapshot = data?.accounts.find(record => sameFollowAccount(record.account, account))?.latest;
-  const age = Date.now() - snapshot?.at;
-  if (snapshot?.source !== 'live' || !Number.isFinite(age) || age < 0 || age >= unfollowScanMaxAge ||
-      (verification && (!sameFollowAccount(verification.account, account) || verification.at !== snapshot.at))) {
-    throw new Error('Takipten çıkma için İlişkiler sekmesinde son 10 dakika içinde tamamlanmış bir canlı tarama gerekli.');
-  }
-  return {account, snapshot};
+function validUnfollowArchive(archive) {
+  return !archive?.archiveWarning && Array.isArray(archive?.followerNames) && Array.isArray(archive.followingNames);
 }
 
-async function verifyUnfollowCandidate(sender, state, username) {
-  if (!state.unfollowVerification) throw new Error('Önce canlı takipçi taramasını tamamla.');
-  const {snapshot} = await unfollowSnapshot(sender, state.unfollowVerification);
+function recentCheck(at) {
+  const age = Date.now() - at;
+  return Number.isFinite(age) && age >= 0 && age < unfollowScanMaxAge;
+}
+
+async function liveUnfollowSnapshot(account) {
+  const data = (await chrome.storage.local.get(relationshipsKey))[relationshipsKey];
+  const snapshot = data?.accounts.find(record => sameFollowAccount(record.account, account))?.latest;
+  return snapshot?.source === 'live' && recentCheck(snapshot.at) ? snapshot : null;
+}
+
+const unfollowDataKeys = ['follow-studio-cache', 'follow-studio-protected'];
+
+async function verifyUnfollowCandidate(sender, state, username, data) {
+  const run = state.unfollowRun;
+  const account = await senderFollowAccount(sender);
+  if (!run || !sameFollowAccount(run.account, account)) throw new Error('Instagram hesabı işlem sırasında değişti.');
+  const records = data || await chrome.storage.local.get(unfollowDataKeys);
+  const archive = records['follow-studio-cache'];
+  if (!validUnfollowArchive(archive) || archive.importedAt !== run.archiveAt || archive.filename !== run.filename) {
+    throw new Error('ZIP arşivi işlem sırasında değişti. Kuyruğu yeniden başlat.');
+  }
+  if (Object.hasOwn(records['follow-studio-protected'] || {}, username)) {
+    throw Object.assign(new Error('Korunan hesap, atlandı.'), {outcome: 'protected'});
+  }
+  if (archive.followerNames.includes(username) || !archive.followingNames.includes(username)) {
+    throw Object.assign(new Error('ZIP takipçi doğrulaması başarısız; işlem yapılmadı.'), {outcome: 'follower'});
+  }
+  if (run.liveAt == null) return;
+  const snapshot = await liveUnfollowSnapshot(account);
+  if (snapshot?.at !== run.liveAt) throw new Error('Canlı doğrulamanın süresi doldu. Kuyruğu yeniden başlat.');
   if (snapshot.followers.includes(username)) {
     throw Object.assign(new Error('Canlı listede seni takip ediyor; atlandı.'), {outcome: 'follower'});
   }
@@ -42,17 +64,35 @@ async function handle(message, sender) {
   if (sender.id !== chrome.runtime.id || !sender.tab || !instagram(sender.url)) throw new Error('Geçersiz eklenti isteği.');
   const tabId = sender.tab.id;
   const state = await session();
-  if (message.type.startsWith('relationships-')) return handleRelationships(message, sender, state);
+  if (message.type.startsWith('relationships-')) return handleRelationships(message, sender);
   if (message.type.startsWith('follow-')) return handleFollow(message, sender, state);
+  if (message.type.startsWith('dm-')) return handleDm(message, sender, state);
   if (message.type === 'studio-ready') {
+    await stopLegacyRelationshipScan();
     const open = Boolean(state.pendingOpen[tabId]);
     delete state.pendingOpen[tabId]; await save(state);
     return {open};
   }
   if (message.type === 'studio-profile-details' && sender.frameId === 0) {
     const account = await senderFollowAccount(sender);
-    const data = (await chrome.storage.local.get(relationshipsKey))[relationshipsKey];
+    const storage = await chrome.storage.local.get([relationshipsKey, photoCacheKey, 'follow-studio-cache',
+      'follow-studio-protected', 'follow-studio-frozen']);
+    const data = storage[relationshipsKey];
     const saved = data?.accounts.find(record => sameFollowAccount(record.account, account));
+    const scan = await relationshipJob();
+    const names = new Set((storage['follow-studio-cache']?.items || []).map(item => item.name));
+    for (const name of Object.keys(storage['follow-studio-protected'] || {})) names.add(name);
+    for (const name of Object.keys(storage['follow-studio-frozen'] || {})) names.add(name);
+    const cached = storage[photoCacheKey];
+    const observed = sameFollowAccount(cached?.account, account) ? cached.photos : {};
+    const newPhotos = verifiedRelationshipPhotos(names, message.photos);
+    const changed = Object.entries(newPhotos).some(([name, src]) => observed[name] !== src);
+    if (changed) {
+      await chrome.storage.local.set({[photoCacheKey]: {account,
+        photos: verifiedRelationshipPhotos(names, {...observed, ...newPhotos})}});
+    }
+    const photos = {...saved?.photos, ...(sameFollowAccount(scan?.account, account) ? scan.photos : {}),
+      ...observed, ...newPhotos};
     const queue = await readFollowQueue();
     const followedAt = new Map();
     if (sameFollowAccount(queue.account, account)) {
@@ -62,16 +102,21 @@ async function handle(message, sender) {
         }
       }
     }
-    return {photos: saved?.photos || {}, followedAt: Object.fromEntries(followedAt)};
+    return {photos, followedAt: Object.fromEntries(followedAt)};
   }
   if (message.type === 'studio-claim') {
     if (sender.frameId !== 0) throw new Error('İşlem ana sekmeden başlatılmalı.');
     if (state.owner !== null && await alive(state.owner)) return {claimed: false};
     if ((await relationshipJob())?.running) throw new Error('Önce takipleşme taramasını durdur.');
     if ((await readFollowQueue()).running) throw new Error('Takip kuyruğunu önce durdur.');
-    const {account, snapshot} = await unfollowSnapshot(sender);
-    state.unfollowVerification = {account, at: snapshot.at};
-    state.owner = tabId; await save(state);
+    if ((await readDmQueue())?.running) throw new Error('Önce mesaj işlemini durdur.');
+    const archive = (await chrome.storage.local.get('follow-studio-cache'))['follow-studio-cache'];
+    if (!validUnfollowArchive(archive)) throw new Error('Önce tüm zamanları içeren takipçi JSON ZIP’ini yükle.');
+    const account = await senderFollowAccount(sender);
+    const snapshot = await liveUnfollowSnapshot(account);
+    state.unfollowRun = {account, archiveAt: archive.importedAt, filename: archive.filename, liveAt: snapshot?.at};
+    state.owner = tabId;
+    await save(state);
     return {claimed: true};
   }
   if (message.type === 'studio-verify-candidate') {
@@ -80,18 +125,14 @@ async function handle(message, sender) {
     return {};
   }
   if (message.type === 'studio-check') {
-    const data = await chrome.storage.local.get([jobKey, 'follow-studio-cache', 'follow-studio-protected']);
-    const job = data[jobKey], archive = data['follow-studio-cache'];
-    const protectedAccounts = data['follow-studio-protected'] || {};
+    const data = await chrome.storage.local.get([jobKey, ...unfollowDataKeys]);
+    const job = data[jobKey];
     const profile = new URL(sender.url).pathname.split('/').filter(Boolean)[0];
     const worker = state.workers[tabId];
     const owned = state.owner !== null && ((tabId === state.owner && sender.frameId > 0) ||
       (worker && worker.owner === state.owner && worker.job === message.id));
     if (!owned || profile !== message.username || !job || job.id !== message.id || job.username !== message.username || job.state !== 'running') throw new Error('İşlem durduruldu veya başka bir sekmeye ait.');
-    if (Object.prototype.hasOwnProperty.call(protectedAccounts, message.username)) throw Object.assign(new Error('Korunan hesap, atlandı.'), {outcome: 'protected'});
-    if (!archive || archive.archiveWarning || !Array.isArray(archive.followerNames) || !Array.isArray(archive.followingNames) ||
-        archive.followerNames.includes(message.username) || !archive.followingNames.includes(message.username)) throw Object.assign(new Error('ZIP takipçi doğrulaması başarısız; işlem yapılmadı.'), {outcome: 'follower'});
-    await verifyUnfollowCandidate(sender, state, message.username);
+    await verifyUnfollowCandidate(sender, state, message.username, data);
     return {job};
   }
   if (message.type === 'studio-open-worker') {
@@ -113,7 +154,7 @@ async function handle(message, sender) {
   if (message.type === 'studio-release') {
     if (state.owner === tabId && sender.frameId === 0) {
       state.owner = null;
-      delete state.unfollowVerification;
+      delete state.unfollowRun;
       const workers = Object.entries(state.workers).filter(([, record]) => record.owner === tabId);
       for (const [id] of workers) delete state.workers[id];
       await save(state);
@@ -154,7 +195,7 @@ function cleanup(tabId, navigating = false) {
     delete state.pendingOpen[tabId]; delete state.workers[tabId];
     if (state.owner === tabId) {
       state.owner = null;
-      delete state.unfollowVerification;
+      delete state.unfollowRun;
       const data = await chrome.storage.local.get(jobKey);
       if (data[jobKey]) await chrome.storage.local.set({[jobKey]: {...data[jobKey], state: 'stopped'}});
       const workers = Object.keys(state.workers); state.workers = {};

@@ -137,14 +137,14 @@ test('MV3 package uses Instagram host, storage, alarms and account cookie access
   assert.doesNotMatch(read('content.js'), /GM_|eval\(|new Function|https:\/\/raw\.githubusercontent/);
 });
 
-test('panel uses Instagram page language for all tools, archive details and live verification messages', async t => {
+test('panel uses Instagram page language for all tools, archive details and queue guidance', async t => {
   const date = new Date('2023-11-14T12:00:00Z');
   const archive = {[cacheKey]: {items: [{name: 'fixture_candidate', timestamp: date.getTime() / 1000}],
     filename: 'archive.zip', followingNames: ['fixture_candidate'], followerNames: [], followers: 0, following: 1}};
   for (const [language, labels] of [
-    ['en-GB', ['Follow queue', 'Unfollow', 'Relationships']],
-    ['tr-TR', ['Toplu takip', 'Takipten çık', 'Takipleşme']],
-    ['de', ['Follow queue', 'Unfollow', 'Relationships']]
+    ['en-GB', ['Follow queue', 'Unfollow', 'Relationships', 'Messages']],
+    ['tr-TR', ['Toplu takip', 'Takipten çık', 'Takipleşme', 'Mesajlar']],
+    ['de', ['Follow queue', 'Unfollow', 'Relationships', 'Messages']]
   ]) {
     const {dom, panel} = await app(environment(archive), undefined, 1, language);
     t.after(() => dom.window.close());
@@ -155,16 +155,15 @@ test('panel uses Instagram page language for all tools, archive details and live
     if (language === 'en-GB') {
       assert.match(panel.querySelector('[data-caption]').textContent, /Saved list · archive.zip · As of the archive date/);
       assert.equal(panel.querySelector('.date').textContent, 'Recorded follow date · ' + date.toLocaleDateString('en-GB'));
-      await panel.querySelector('[data-start]').onclick();
-      assert.match(panel.querySelector('.activity pre').textContent, /Complete a live scan in Relationships/);
+      assert.match(panel.querySelector('#studio-view-unfollow').textContent, /Start processes the ZIP candidates in the current list/);
       panel.querySelector('#studio-tab-relationships').click();
       await new Promise(resolve => setImmediate(resolve));
-      assert.equal(panel.querySelector('[data-relationship-start]').textContent, 'Create first snapshot');
+      assert.equal(panel.querySelector('[data-relationship-archive] summary').textContent, 'Import an Instagram JSON archive');
     }
   }
 });
 
-test('verified scan photos render inline, recorded re-follows take priority, and protected accounts can be released', async t => {
+test('photos already loaded by Instagram render inline, recorded re-follows take priority, and protected accounts can be released', async t => {
   const timestamp = Date.parse('2026-06-15T12:00:00Z');
   const photo = 'https://scontent.cdninstagram.com/avatar-fixture.jpg';
   const account = {id: '1001', storeId: '0'};
@@ -175,8 +174,8 @@ test('verified scan photos render inline, recorded re-follows take priority, and
       {name: item.name, time: timestamp, outcome: 'followed'},
       {name: item.name, time: timestamp + 100000, outcome: 'already'}
     ]}});
-  const scan = await relationshipWorker(env, t, [], [item.name], {photos: {[item.name]: photo}});
-  assert.equal(scan.saved.photos[item.name], photo);
+  const details = await env.send({type: 'studio-profile-details', photos: {[item.name]: photo}});
+  assert.equal(details.photos[item.name], photo);
   const {dom, w, panel} = await app(env, undefined, 1, 'en-GB');
   t.after(() => dom.window.close());
   panel.querySelector('[data-open]').click();
@@ -199,6 +198,41 @@ test('verified scan photos render inline, recorded re-follows take priority, and
   env.setAccount('1002');
   const other = await env.send({type: 'studio-profile-details'});
   assert.equal(Object.keys(other.photos).length + Object.keys(other.followedAt).length, 0);
+});
+
+test('already loaded Instagram avatars are captured without requesting pages or starting an unfollow', async t => {
+  const names = ['fixture_candidate', 'fixture_other'];
+  const photo = 'https://scontent.cdninstagram.com/avatar-fixture.jpg';
+  const env = environment({[cacheKey]: {items: names.map(name => ({name})),
+    followingNames: names, followerNames: [], followers: 0, following: 2}});
+  const {dom, panel, w} = await app(env, undefined, 1, 'en');
+  t.after(() => dom.window.close());
+  w.fetch = () => assert.fail('Photo collection must not fetch Instagram pages');
+
+  for (const [name, url] of [[names[0], photo], [names[1], 'https://example.invalid/other.jpg'],
+    ['unrelated', 'https://scontent.cdninstagram.com/unrelated.jpg']]) {
+    const link = w.document.createElement('a');
+    link.href = '/' + name + '/';
+    const image = w.document.createElement('img');
+    image.src = url;
+    Object.defineProperties(image, {
+      complete: {value: true}, naturalWidth: {value: 150}, naturalHeight: {value: 150}
+    });
+    image.getClientRects = () => [{}];
+    link.append(image);
+    w.document.body.append(link);
+    image.dispatchEvent(new w.Event('load'));
+  }
+  await new Promise(resolve => setTimeout(resolve, 250));
+  panel.querySelector('[data-open]').click();
+  panel.querySelector('#studio-tab-unfollow').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([...panel.querySelectorAll('[data-results] .avatar img')].map(image => image.src), [photo]);
+  assert.deepEqual(env.local['follow-studio-observed-photos'].photos, {[names[0]]: photo});
+  assert.equal(env.tabs.size, 2);
+  assert.equal(env.local[relationshipsKey], undefined);
+  assert.equal(env.session['follow-studio-session'].owner, null);
+  assert.equal(env.local[jobKey], undefined);
 });
 
 test('unfollow ZIP keeps the newest known follow date if a username appears twice', async t => {
@@ -239,6 +273,146 @@ test('native extension UI works without Monkey and removes successful accounts',
   assert.equal(env.local['follow-studio-run-summary'].unfollowed, 1);
   assert.equal(env.session['follow-studio-session'].owner, null);
   assert.equal(env.tabs.size, 2, 'Worker tab closed');
+});
+
+const dmQueueKey = 'follow-studio-dm-queue';
+const dmFixtureThread = 'https://www.instagram.com/direct/t/123456789/';
+
+test('the Messages tab requires the current thread and explicit confirmation, then opens an independent worker', async t => {
+  const env = environment();
+  const {dom, panel} = await app(env, dmFixtureThread, 1, 'en');
+  t.after(() => dom.window.close());
+  panel.querySelector('[data-open]').click();
+  panel.querySelector('#studio-tab-messages').click();
+  await new Promise(resolve => setImmediate(resolve));
+  const start = panel.querySelector('[data-dm-start]');
+  const confirmation = panel.querySelector('[data-dm-confirm]');
+  assert.equal(start.disabled, true);
+  assert.equal((await env.send({type: 'dm-start', confirmed: true})).ok, false, 'No conversation is open');
+  assert.equal((await env.send({type: 'dm-start'}, 1, 0, dmFixtureThread)).ok, false);
+  assert.equal(env.local[dmQueueKey], undefined);
+  confirmation.click();
+  assert.equal(start.disabled, false);
+  await start.onclick();
+  const job = env.local[dmQueueKey];
+  assert.equal(env.tabs.get(job.tabId).active, false);
+  assert.equal(job.thread, '123456789');
+  assert.equal(job.running, true);
+  assert.match(panel.querySelector('[data-dm-status]').textContent, /Message job running in the background/);
+
+  env.tabs.delete(1);
+  for (const listener of env.removed) listener(1, {isWindowClosing: false});
+  await env.send({type: 'studio-ready'}, 2);
+  assert.equal(env.local[dmQueueKey].running, true);
+  assert.equal(env.local[dmQueueKey].tabId, job.tabId);
+  assert.equal((await env.send({type: 'dm-stop'}, 2)).ok, true);
+  assert.equal(env.tabs.has(job.tabId), false);
+  assert.equal(env.local[dmQueueKey].running, false);
+});
+
+test('a closed worker is replaced before an unsend but an interrupted confirmation is not replayed', async () => {
+  const env = environment();
+  await env.send({type: 'dm-start', confirmed: true}, 1, 0, dmFixtureThread);
+  const first = env.local[dmQueueKey];
+  async function close(tabId) {
+    env.tabs.delete(tabId);
+    for (const listener of env.removed) listener(tabId, {isWindowClosing: false});
+    await env.send({type: 'studio-ready'}, 2);
+  }
+  await close(first.tabId);
+  const worker = env.local[dmQueueKey];
+  assert.notEqual(worker.tabId, first.tabId);
+  assert.equal(worker.id, first.id);
+  const url = env.tabs.get(worker.tabId).url;
+  assert.equal((await env.send({type: 'dm-resume'}, worker.tabId, 0, 'https://www.instagram.com/direct/t/999/')).ok, false);
+  assert.equal((await env.send({type: 'dm-commit', id: worker.id}, worker.tabId, 0, url)).ok, false);
+  assert.equal((await env.send({type: 'dm-resume'}, worker.tabId, 0, url)).id, worker.id);
+  assert.equal((await env.send({type: 'dm-commit', id: worker.id}, worker.tabId, 0, url)).ok, true);
+  await close(worker.tabId);
+  assert.equal(env.local[dmQueueKey].running, false);
+  assert.equal(env.local[dmQueueKey].count, 0);
+  assert.match(env.local[dmQueueKey].status, /sonucu belirsiz/);
+  assert.equal(env.tabs.size, 2);
+});
+
+async function runDmWorker(env, t, variant) {
+  await env.send({type: 'dm-start', confirmed: true}, 1, 0, dmFixtureThread);
+  const job = env.local[dmQueueKey];
+  const url = env.tabs.get(job.tabId).url;
+  const dom = new JSDOM(`<html lang="en"><body><main data-pagelet="IGDMessagesList">
+    <div role="row" id="incoming"><button aria-label="More options">⋯</button></div>
+    <div role="row" id="outgoing" style="display:flex;justify-content:flex-end">
+      <button aria-label="See more options for message">⋯</button>
+    </div></main></body></html>`, {url, runScripts: 'outside-only'});
+  t.after(() => dom.window.close());
+  const w = dom.window;
+  const outgoing = w.document.getElementById('outgoing');
+  let elapsed = 0;
+  w.Date.now = () => elapsed;
+  w.setTimeout = (fn, ms) => { elapsed += ms; return setImmediate(fn); };
+  w.HTMLElement.prototype.getClientRects = () => [{}];
+  w.HTMLElement.prototype.getBoundingClientRect = () => ({top: 0, bottom: 100, height: 100, width: 100, x: 0, y: 0});
+  let cancelClicks = 0;
+  let incomingClicks = 0;
+  let confirmations = 0;
+  w.document.querySelector('#incoming button').onclick = () => incomingClicks++;
+  const more = outgoing.querySelector('button');
+  function openMessageActions() {
+    const instagramPopover = variant === 'instagram-popover';
+    const menu = w.document.createElement('div');
+    menu.setAttribute('role', instagramPopover ? 'dialog' : 'menu');
+    menu.innerHTML = instagramPopover ?
+      '<div role="button"><span>Copy</span></div><div role="button"><div><span>Unsend</span><span>Additional text</span></div></div>' :
+      '<div role="menuitem"><span>Unsend</span></div>';
+    menu.lastElementChild.onclick = () => {
+      assert.equal(env.local[dmQueueKey].pending, true);
+      const dialog = instagramPopover ? menu : w.document.createElement('div');
+      if (!instagramPopover) menu.remove();
+      dialog.setAttribute('role', 'dialog');
+      dialog.innerHTML = '<button>Cancel</button><button>Unsend</button>';
+      const [cancel, unsend] = dialog.querySelectorAll('button');
+      cancel.onclick = () => cancelClicks++;
+      unsend.onclick = () => {
+        confirmations++;
+        dialog.remove();
+        outgoing.remove();
+      };
+      w.document.body.append(dialog);
+    };
+    w.document.body.append(menu);
+  }
+  if (variant === 'instagram-popover') {
+    more.onkeydown = event => { if (event.key === 'Enter') openMessageActions(); };
+  } else {
+    more.onclick = openMessageActions;
+  }
+  if (variant === 'restricted') {
+    w.document.body.insertAdjacentHTML('beforeend', '<div role="alert">Try again later</div>');
+  }
+  w.chrome = {runtime: {sendMessage: message => env.send(message, job.tabId, 0, url)}};
+  w.eval(read('i18n.js'));
+  w.eval(read('dm-content.js'));
+  await w.eval(read('content.js'));
+  return {cancelClicks, incomingClicks, confirmations};
+}
+
+test('the worker confirms only the Instagram Unsend button, leaves incoming messages alone, and stops on restrictions', async t => {
+  const env = environment();
+  assert.deepEqual(await runDmWorker(env, t), {cancelClicks: 0, incomingClicks: 0, confirmations: 1});
+  assert.equal(env.local[dmQueueKey].count, 1);
+  assert.equal(env.local[dmQueueKey].running, false);
+  const restricted = environment();
+  assert.deepEqual(await runDmWorker(restricted, t, 'restricted'), {cancelClicks: 0, incomingClicks: 0, confirmations: 0});
+  assert.equal(restricted.local[dmQueueKey].count, 0);
+  assert.match(restricted.local[dmQueueKey].status, /kısıtlama/);
+});
+
+test('the worker finds Instagram’s dialog popover, nested Unsend label and separate confirmation after keyboard activation', async t => {
+  const env = environment();
+  assert.deepEqual(await runDmWorker(env, t, 'instagram-popover'),
+    {cancelClicks: 0, incomingClicks: 0, confirmations: 1});
+  assert.equal(env.local[dmQueueKey].count, 1);
+  assert.equal(env.local[dmQueueKey].running, false);
 });
 
 test('background owns worker tabs, rejects concurrent controllers, rechecks follower/protection before clicks', async () => {
@@ -294,20 +468,52 @@ test('unfollow skips accounts that follow back or are missing from a complete li
   }
 });
 
-test('unfollow cannot start with a ZIP comparison alone or an expired live scan', async t => {
-  const env = environment({[cacheKey]: {items: [{name: 'fixture_candidate', timestamp: 1}],
-    followingNames: ['fixture_candidate'], followerNames: []}});
-  const {dom, panel} = await app(env);
+test('Start processes the entire current ZIP list with no per-account selection', async t => {
+  const names = ['fixture_first', 'fixture_second', 'fixture_protected', 'fixture_follower', 'fixture_excluded'];
+  const env = environment({[cacheKey]: {items: names.map((name, i) => ({name, timestamp: i + 1})),
+    importedAt: 123, followingNames: names, followerNames: ['fixture_follower'], following: names.length,
+    followers: 1, excluded: ['fixture_excluded']},
+    'follow-studio-protected': {fixture_protected: {name: 'fixture_protected'}}});
+  const {dom, panel} = await app(env, undefined, 1, 'en');
   t.after(() => dom.window.close());
-  panel.querySelector('[data-manual] textarea').value = 'fixture_candidate';
-  for (const options of [null, {source: 'archive'}, {at: Date.now() - 11 * 60000}]) {
-    if (options) await env.storage.local.set({[relationshipsKey]: unfollowRelationshipFixture(options)});
-    await panel.querySelector('[data-start]').onclick();
-    assert.equal(env.local[jobKey], undefined);
-    assert.equal(env.session['follow-studio-session'].owner, null);
-    assert.equal(panel.querySelector('.activity').open, true);
-    assert.match(panel.querySelector('.activity pre').textContent, /canlı tarama gerekli/);
-  }
+  panel.querySelector('[data-open]').click();
+  panel.querySelector('#studio-tab-unfollow').click();
+  assert.equal(panel.querySelector('[data-results] input[type=checkbox]'), null);
+  assert.deepEqual([...panel.querySelectorAll('[data-results] .account-info a')].map(link => link.textContent),
+    ['@fixture_first', '@fixture_second']);
+  panel.querySelector('[data-manual] textarea').value = 'fixture_first';
+  panel.querySelector('[data-mode]').value = 'background';
+  panel.querySelector('#wait-seconds').value = '0';
+  const attempted = [];
+  env.onCreated(() => {
+    const job = env.local[jobKey];
+    attempted.push(job.username);
+    void env.storage.local.set({[jobKey]: {...job, state: 'done', outcome: 'unfollowed', message: 'Synthetic result'}});
+  });
+  await panel.querySelector('[data-start]').onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(attempted, names.slice(0, 2));
+  assert.equal(env.tabs.size, 2);
+  assert.equal(env.local['follow-studio-run-summary'].unfollowed, 2);
+  assert.equal(env.local[relationshipsKey], undefined, 'Starting from the ZIP must not scan follower lists');
+});
+
+test('ZIP-based runs require valid archive data and stop on archive or Instagram account changes', async () => {
+  const name = 'fixture_target';
+  const archive = {items: [{name}], importedAt: 123, filename: 'fixture.zip', followingNames: [name], followerNames: []};
+  const env = environment({[cacheKey]: {items: [{name}]}});
+  const claim = () => env.send({type: 'studio-claim'});
+  const check = () => env.send({type: 'studio-verify-candidate', username: name});
+  assert.equal((await claim()).ok, false);
+  await env.storage.local.set({[cacheKey]: archive});
+  assert.equal((await claim()).claimed, true);
+  assert.equal((await check()).ok, true);
+  await env.storage.local.set({[cacheKey]: {...archive, importedAt: 124}});
+  assert.match((await check()).error, /ZIP arşivi işlem sırasında değişti/);
+  await env.storage.local.set({[cacheKey]: archive});
+  env.setAccount('2002');
+  assert.match((await check()).error, /Instagram hesabı işlem sırasında değişti/);
+  assert.equal(env.tabs.size, 2);
 });
 
 test('storage persistence failure prevents a worker from opening', async t => {
@@ -824,161 +1030,65 @@ test('clipboard permission failure leaves a selectable remaining list and manual
   assert.match(panel.querySelector('[data-follow-import-result]').textContent, /Ctrl\+V/);
 });
 
-async function relationshipWorker(env, t, followers, following, options = {}) {
-  const stateKey = 'follow-studio-relationships';
-  const jobKey = 'follow-studio-relationship-job';
-  const started = await env.send({type: 'relationships-start', username: 'owner'});
-  assert.equal(started.ok, true, started.error);
-  const job = env.local[jobKey];
-  assert.equal(env.tabs.get(job.tabId).active, false);
-  const dom = new JSDOM('<main><header><h2>owner</h2>' +
-    (options.notOwner ? '' : '<a href="/accounts/edit/">Profili düzenle</a>') +
-    '<a data-list="followers" href="' + (options.hashLinks ? '#' : '/owner/followers/') + '"><span title="' + (options.countLabel || followers.length) + '">' + (options.english ? followers.length + ' followers' : 'Takipçiler') + '</span></a>' +
-    '<a data-list="following" href="' + (options.hashLinks ? '#' : '/owner/following/') + '"><span title="' + following.length + '">' + (options.english ? following.length + ' following' : 'Takip') + '</span></a>' +
-    '</header></main>', {url: job.url, runScripts: 'outside-only'});
-  t.after(() => dom.window.close());
-  const w = dom.window;
-  w.HTMLElement.prototype.getClientRects = () => [{}];
-  let elapsed = 0;
-  w.Date.now = () => elapsed;
-  w.setTimeout = (fn, ms) => { elapsed += ms; return setImmediate(fn); };
-  let scrolls = 0;
-  let clicks = 0;
-  for (const kind of ['followers', 'following']) {
-    w.document.querySelector('[data-list="' + kind + '"]').onclick = event => {
-      event.preventDefault();
-      clicks++;
-      const list = kind === 'followers' ? followers : following;
-      const scope = w.document.createElement('div');
-      scope.setAttribute('role', 'dialog');
-      scope.innerHTML = '<h2>' + kind + '</h2><button aria-label="Close">×</button>' +
-        '<div data-scroll style="overflow-y:auto"></div><h3>Suggested for you</h3><a href="/suggestion/">suggestion</a>';
-      const scroller = scope.querySelector('[data-scroll]');
-      let position = 0;
-      const render = () => {
-        const rows = options.incomplete ? list.slice(0, 1) : list.slice(position, position + 2);
-        scroller.innerHTML = rows.map(name => '<div><a href="/' + name + '/">' + name +
-          '</a><a href="/' + name + '/"><img alt="Avatar"' +
-          (options.photos?.[name] ? ' src="' + options.photos[name] + '"' : '') + '></a></div>').join('');
-      };
-      Object.defineProperties(scroller, {
-        clientHeight: {get: () => 100}, scrollHeight: {get: () => Math.max(200, list.length * 100)},
-        scrollTop: {get: () => position * 100, set: () => {
-          scrolls++; position = Math.min(position + 1, Math.max(0, list.length - 2)); render();
-        }}
-      });
-      render();
-      scope.querySelector('button').onclick = () => scope.remove();
-      w.document.body.append(scope);
-    };
-  }
-  w.chrome = {runtime: {sendMessage: message => env.send(message, job.tabId, 0, job.url)}};
-  w.eval(read('i18n.js'));
-  w.eval(read('relationships-content.js'));
-  await w.eval('FollowStudioRelationships.work(' + JSON.stringify(job.id) + ')');
-  return {saved: env.local[stateKey]?.accounts[0], job: env.local[jobKey], scrolls, clicks};
+async function relationshipArchive(env, followers, following, at) {
+  return env.send({type: 'relationships-import', username: 'owner',
+    expectedAccount: {id: '1001', storeId: '0'}, allTime: true, at, followers, following});
 }
 
-test('relationship scans scroll full lists and compare dated follower and mutual losses', async t => {
+test('archive snapshots compare dated follower and mutual losses', async () => {
   const env = environment();
-  const first = await relationshipWorker(env, t, ['alice', 'bob', 'carol'], ['alice', 'bob']);
-  assert.ok(first.scrolls > 0);
-  assert.equal(first.job.running, false);
-  assert.deepEqual(first.saved.latest.followers, ['alice', 'bob', 'carol']);
-  assert.deepEqual(first.saved.latest.following, ['alice', 'bob']);
-  assert.deepEqual(first.saved.events, []);
-  assert.equal(first.saved.scans.length, 1);
-  const previousDate = Date.now() - 86400000;
-  env.local['follow-studio-relationships'].accounts[0].latest.at = previousDate;
-  const second = await relationshipWorker(env, t, ['bob', 'carol'], ['carol']);
-  assert.equal(second.saved.events.length, 2);
-  const alice = second.saved.events.find(event => event.name === 'alice');
-  const bob = second.saved.events.find(event => event.name === 'bob');
+  const initial = Date.now() - 86400000;
+  assert.equal((await relationshipArchive(env, ['alice', 'bob', 'carol'], ['alice', 'bob'], initial)).ok, true);
+  assert.equal((await relationshipArchive(env, ['bob', 'carol'], ['carol'], initial + 1)).changes, 2);
+  assert.equal((await relationshipArchive(env, ['bob', 'carol'], ['carol'], initial + 2)).changes, 0);
+  const saved = env.local[relationshipsKey].accounts[0];
+  const [alice, bob] = saved.events;
+  assert.equal(alice.name, 'alice');
   assert.equal(alice.type, 'lost_follower');
   assert.equal(alice.wasMutual, true);
+  assert.equal(bob.name, 'bob');
   assert.equal(bob.type, 'mutual_ended');
-  assert.equal(alice.from, previousDate);
-  assert.ok(alice.to > previousDate);
-  assert.equal(second.saved.scans.length, 2);
-  const third = await relationshipWorker(env, t, ['bob', 'carol'], ['carol']);
-  assert.equal(third.saved.events.length, 2);
-  assert.equal(third.saved.scans.length, 3);
+  assert.equal(alice.from, initial);
+  assert.equal(alice.to, initial + 1);
+  assert.equal(saved.scans.length, 3);
 });
 
-test('partial lists, abbreviated counts and another profile never replace the relationship baseline', async t => {
-  const env = environment();
-  await relationshipWorker(env, t, ['alice', 'bob', 'carol'], ['alice']);
-  const original = structuredClone(env.local['follow-studio-relationships']);
-  for (const options of [{incomplete: true}, {countLabel: '1.2K'}, {notOwner: true}]) {
-    const result = await relationshipWorker(env, t, ['alice', 'bob', 'carol'], ['alice'], options);
-    assert.equal(result.job.running, false);
-    assert.match(result.job.status, /Önceki kayıt korundu/);
-    assert.deepEqual(env.local['follow-studio-relationships'], original);
+test('extension cancels a legacy automatic scan and cannot start or resume one', async () => {
+  const profile = 'https://www.instagram.com/owner/?follow_studio_scan=old-scan';
+  const scanKey = 'follow-studio-relationship-job';
+  const env = environment({[scanKey]: {id: 'old-scan', account: {id: '1001', storeId: '0'}, username: 'owner',
+    running: true, tabId: 3, url: profile}});
+  env.tabs.set(3, {id: 3, url: profile});
+  assert.equal((await env.send({type: 'studio-ready'})).ok, true);
+  assert.equal(env.local[scanKey].running, false);
+  assert.equal(env.tabs.has(3), false);
+  for (const type of ['relationships-start', 'relationships-resume', 'relationships-check',
+    'relationships-progress', 'relationships-result']) {
+    assert.equal((await env.send({type, username: 'owner'})).ok, false);
   }
+  assert.equal(env.tabs.size, 2);
+  assert.equal(env.local[relationshipsKey], undefined);
 });
 
-test('relationship scan cancellation, account changes and mutual exclusion preserve saved records', async t => {
+test('relationship recording fails without replacing a valid baseline if storage is full', async () => {
   const env = environment();
-  await relationshipWorker(env, t, [], []);
-  const original = structuredClone(env.local['follow-studio-relationships']);
-  await env.send({type: 'relationships-start', username: 'owner'});
-  assert.equal((await env.send({type: 'follow-start', settings: {min: 1, max: 1, batch: 10, rest: 15}})).ok, false);
-  assert.equal((await env.send({type: 'studio-claim'})).ok, false);
-  await env.send({type: 'relationships-stop'});
-  assert.deepEqual(env.local['follow-studio-relationships'], original);
-  await env.send({type: 'relationships-start', username: 'owner'});
-  env.setAccount('2002', true);
-  await env.send({type: 'studio-ready'});
-  assert.equal(env.local['follow-studio-relationship-job'].running, false);
-  assert.equal((await env.send({type: 'relationships-state'})).saved, undefined);
-  assert.deepEqual(env.local['follow-studio-relationships'], original);
-});
-
-test('relationship result rejects duplicates and incomplete counts without recording false losses', async () => {
-  const env = environment();
-  await env.send({type: 'relationships-start', username: 'owner'});
-  const job = env.local['follow-studio-relationship-job'];
-  const result = await env.send({type: 'relationships-result', id: job.id, counts: {followers: 2, following: 0},
-    followers: ['duplicate', 'duplicate'], following: [], ownerConfirmed: true}, job.tabId, 0, job.url);
-  assert.equal(result.ok, false);
-  assert.equal(env.local['follow-studio-relationship-job'].running, false);
-  assert.equal(env.local['follow-studio-relationships'], undefined);
-});
-
-test('relationship workers can resume on list routes and expire safely', async () => {
-  const env = environment();
-  assert.equal((await env.send({type: 'relationships-resume'})).id, undefined);
-  await env.send({type: 'relationships-start', username: 'owner'});
-  const job = env.local['follow-studio-relationship-job'];
-  const listUrl = 'https://www.instagram.com/owner/followers/';
-  assert.equal((await env.send({type: 'relationships-resume'}, job.tabId, 0, listUrl)).id, job.id);
-  assert.equal((await env.send({type: 'relationships-check', id: job.id}, job.tabId, 0, listUrl)).ok, true);
-  env.local['follow-studio-relationship-job'].expires = 1;
-  for (const alarm of env.alarms) alarm({name: 'follow-studio-relationship-timeout'});
-  await env.send({type: 'studio-ready'});
-  assert.equal(env.local['follow-studio-relationship-job'].running, false);
-  assert.equal(env.local['follow-studio-relationships'], undefined);
-});
-
-test('relationship recording fails without replacing a valid baseline if storage is full', async t => {
-  const env = environment();
-  await relationshipWorker(env, t, ['alice'], ['alice']);
-  const original = structuredClone(env.local['follow-studio-relationships']);
+  const initial = Date.now() - 1000;
+  assert.equal((await relationshipArchive(env, ['alice'], ['alice'], initial)).ok, true);
+  const original = structuredClone(env.local[relationshipsKey]);
   const save = env.storage.local.set;
   env.storage.local.set = async values => {
-    if ('follow-studio-relationships' in values) throw new Error('Quota exceeded');
+    if (relationshipsKey in values) throw new Error('Quota exceeded');
     return save(values);
   };
-  const result = await relationshipWorker(env, t, [], []);
-  assert.equal(result.job.running, false);
-  assert.match(result.job.status, /Kayıt alanına/);
-  assert.deepEqual(env.local['follow-studio-relationships'], original);
+  assert.equal((await relationshipArchive(env, [], [], initial + 1)).ok, false);
+  assert.deepEqual(env.local[relationshipsKey], original);
 });
 
 test('relationship history tab shows comparison intervals and keeps other tools hidden', async t => {
   const env = environment();
-  await relationshipWorker(env, t, ['alice', 'bob'], ['alice', 'bob']);
-  await relationshipWorker(env, t, ['bob'], []);
+  const initial = Date.now() - 1000;
+  await relationshipArchive(env, ['alice', 'bob'], ['alice', 'bob'], initial);
+  await relationshipArchive(env, ['bob'], [], initial + 1);
   const {dom, panel} = await app(env);
   t.after(() => dom.window.close());
   panel.querySelector('[data-open]').click();
@@ -988,35 +1098,24 @@ test('relationship history tab shows comparison intervals and keeps other tools 
   assert.equal(view.hidden, false);
   assert.equal(panel.querySelector('#studio-view-follow').hidden, true);
   assert.equal(panel.querySelector('#studio-view-unfollow').hidden, true);
-  assert.equal(view.querySelector('[data-relationship-start]').textContent, 'Değişiklikleri kontrol et');
+  assert.equal(view.querySelector('[data-relationship-import] button').textContent, 'Arşivi kaydet ve karşılaştır');
   assert.match(view.querySelector('[data-relationship-events]').textContent, /alice/);
   assert.match(view.querySelector('[data-relationship-events]').textContent, /Önceki kontrol/);
   assert.match(view.querySelector('[data-relationship-events]').textContent, /Değişimin görüldüğü kontrol/);
   assert.equal(view.querySelector('[data-relationship-scans]').children.length, 2);
 });
 
-test('relationship scans support the live Instagram hash links in Turkish and English', async t => {
-  for (const english of [false, true]) {
-    const env = environment();
-    const result = await relationshipWorker(env, t, ['alice', 'bob', 'carol'], ['alice', 'bob'], {hashLinks: true, english});
-    assert.equal(result.job.running, false);
-    assert.equal(result.clicks, 2);
-    assert.ok(result.scrolls > 0);
-    assert.deepEqual(result.saved.latest.followers, ['alice', 'bob', 'carol']);
-  }
-});
-
 test('relationship username is detected when the profile loads after content script initialization', async t => {
   const env = environment();
   const {dom, w, panel} = await app(env, 'https://www.instagram.com/owner/');
   t.after(() => dom.window.close());
-  assert.equal(panel.querySelector('[data-relationship-form] input').value, '');
+  assert.equal(panel.querySelector('[data-relationship-import] input[name=username]').value, '');
   w.document.body.insertAdjacentHTML('afterbegin', '<main><h2>owner</h2><a href="/accounts/edit/">Edit profile</a></main>');
   w.document.querySelector('main a').getClientRects = () => [{}];
   panel.querySelector('[data-open]').click();
   panel.querySelector('#studio-tab-relationships').click();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(panel.querySelector('[data-relationship-form] input').value, 'owner');
+  assert.equal(panel.querySelector('[data-relationship-import] input[name=username]').value, 'owner');
 });
 
 test('relationship ZIP import compares complete archives using their supplied dates and preserves other tools', async t => {
@@ -1026,7 +1125,7 @@ test('relationship ZIP import compares complete archives using their supplied da
   panel.querySelector('[data-open]').click();
   panel.querySelector('#studio-tab-relationships').click();
   await new Promise(resolve => setImmediate(resolve));
-  panel.querySelector('[data-relationship-form] input').value = 'owner';
+  panel.querySelector('[data-relationship-import] input[name=username]').value = 'owner';
   const form = panel.querySelector('[data-relationship-import]');
   form.elements.allTime.checked = true;
   const user = name => ({string_list_data: [{value: name}]});

@@ -15,7 +15,7 @@ replace('  const profileDetails = item => ({photo: item.photoUrl, followedAt: it
     photo: profileData.photos?.[item.name] || item.photoUrl,
     followedAt: Math.max(item.timestamp * 1000 || 0, profileData.followedAt?.[item.name] || 0)
   });`);
-replace("  'use strict';", "  'use strict';\n  const scanId = new URL(location.href).searchParams.get('follow_studio_scan');\n  if (scanId) { if (window.top === window.self) await FollowStudioRelationships.work(scanId); return; }\n  if (window.top === window.self) {\n    const scan = await chrome.runtime.sendMessage({type: 'relationships-resume'});\n    if (scan?.ok && scan.id) { await FollowStudioRelationships.work(scan.id); return; }\n  }\n  const followId = new URL(location.href).searchParams.get('follow_studio_job');\n  if (followId) { if (window.top === window.self) await FollowStudioQueue.work(followId); return; }\n  if (window.top !== window.self && !new URL(location.href).searchParams.has('local_unfollow_job')) return;\n  const bridge = await FollowStudioBridge.connect();\n  const {getValue: storageGet, setValue: storageSet, deleteValue: storageDelete} = bridge;");
+replace("  'use strict';", "  'use strict';\n  if (window.top === window.self && /^\\/direct\\/t\\/\\d+\\/?$/.test(location.pathname)) {\n    const dm = await chrome.runtime.sendMessage({type: 'dm-resume'});\n    if (dm?.ok && dm.id) { await FollowStudioMessages.work(dm.id, dm.thread); return; }\n  }\n  const followId = new URL(location.href).searchParams.get('follow_studio_job');\n  if (followId) { if (window.top === window.self) await FollowStudioQueue.work(followId); return; }\n  if (window.top !== window.self && !new URL(location.href).searchParams.has('local_unfollow_job')) return;\n  const bridge = await FollowStudioBridge.connect();\n  const {getValue: storageGet, setValue: storageSet, deleteValue: storageDelete} = bridge;");
 source = source.replaceAll('GM_getValue', 'storageGet').replaceAll('GM_setValue', 'storageSet').replaceAll('GM_deleteValue', 'storageDelete');
 
 const workerStart = source.indexOf('    const active = () => {');
@@ -40,7 +40,22 @@ replace("        storageSet(key, {id, username, state: 'running', progress: ''})
 replace('handle = GM_openInTab(url, {active: false, insert: true, setParent: true});', 'handle = await bridge.openTab(url);');
 replace('        closeWorker();', '        await bridge.flush();\n        await closeWorker();');
 replace('    } finally { closeWorker(); }', '    } finally { await closeWorker(); }');
-replace("    if (runList === 'queue') {", "    panel.querySelector('.activity').open = true;\n    try {\n      if (!await bridge.claim()) { report('Başka bir Instagram sekmesinde işlem sürüyor. Önce oradaki işlemi durdur.'); return; }\n    } catch (error) { report(error.message); return; }\n    if (runList === 'queue') {");
+replace('  start.onclick = async () => {\n    if (running) return;', `  start.onclick = async () => {
+    if (running) return;
+    const activity = panel.querySelector('.activity');
+    activity.closest('.studio-unfollow-options').open = true;
+    activity.open = true;`);
+replace("        : [...new Set(panel.querySelector('textarea').value",
+  "        : !panel.querySelector('[data-manual]').open\n          ? queueItems().map(item => item.name)\n          : [...new Set(panel.querySelector('textarea').value");
+replace("    if (runList === 'queue') {", `    queueStatus.textContent = '';
+    try {
+      if (!await bridge.claim()) throw new Error('Başka bir Instagram sekmesinde işlem sürüyor. Önce oradaki işlemi durdur.');
+    } catch (error) {
+      queueStatus.textContent = localize(error.message);
+      report(error.message);
+      return;
+    }
+    if (runList === 'queue') {`);
 replace('        const operationStart = Date.now();', `        try {
           await bridge.verifyCandidate(username);
         } catch (error) {
@@ -51,7 +66,10 @@ replace('        const operationStart = Date.now();', `        try {
         }
         if (!running) break;
         const operationStart = Date.now();`);
-replace('ZIP yükle veya son kaydedilen listeyle devam et.', 'ZIP yükle. Takipten çıkmadan önce İlişkiler sekmesinde canlı taramayı tamamla.');
+replace('<div class="list" data-results role="tabpanel"></div>',
+  '<p class="manual-hint">Başlat, açık listedeki ZIP adaylarını sırayla işler.</p><p class="manual-hint" data-unfollow-status role="status"></p><div class="list" data-results role="tabpanel"></div>');
+replace("  const start = panel.querySelector('[data-start]');", `  const start = panel.querySelector('[data-start]');
+  const queueStatus = panel.querySelector('[data-unfollow-status]');`);
 replace("lockControls(); report('Çalışma sona erdi.');", "lockControls(); try { await bridge.release(); } catch (error) { report(error.message); } report('Çalışma sona erdi.');");
 replace("panel.querySelector('[data-open]').onclick = () => { veil.hidden = false; refreshLists(false);", "panel.querySelector('[data-open]').onclick = () => { if (!running && !loading) { listData = storageGet('follow-studio-cache', null); runSummary = storageGet('follow-studio-run-summary', null); excluded = new Set(listData && listData.excluded || []); } veil.hidden = false; refreshLists();");
 source = source.replaceAll("querySelector('input[type=number]')", "querySelector('#wait-seconds')")
@@ -100,22 +118,43 @@ replace('\n})();', `\n  async function readRelationshipArchive(file) {
   }
   FollowStudioQueue.attach(panel, refreshLists, readRelationshipArchive);
   let profileDetailsRevision = 0;
-  async function refreshProfileDetails() {
+  async function refreshProfileDetails(photos) {
+    if (!photos && veil.hidden) return;
     const revision = ++profileDetailsRevision;
-    profileData = {};
-    if (veil.hidden) return;
     try {
-      const data = await bridge.profileDetails();
+      const data = await bridge.profileDetails(photos);
       if (revision !== profileDetailsRevision) return;
       profileData = data;
-    } catch {}
-    if (revision === profileDetailsRevision) refreshLists(false);
+    } catch {
+      if (revision !== profileDetailsRevision) return;
+      profileData = {};
+    }
+    if (!veil.hidden) refreshLists(false);
   }
-  veil.addEventListener('studio-visibility', refreshProfileDetails);
+  function photoNames() {
+    return new Set([
+      ...(storageGet('follow-studio-cache', null)?.items || []).map(item => item.name),
+      ...Object.keys(storageGet(protectedKey, {})),
+      ...Object.keys(storageGet(frozenKey, {}))
+    ]);
+  }
+  let photoCandidates = photoNames();
+  const collectLoadedPhotos = FollowStudioRelationships.observePhotos(name => photoCandidates.has(name), refreshProfileDetails);
+  collectLoadedPhotos();
+  veil.addEventListener('studio-visibility', () => {
+    if (!veil.hidden) collectLoadedPhotos();
+    void refreshProfileDetails();
+  });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || veil.hidden) return;
+    if (area !== 'local') return;
+    if (changes['follow-studio-cache'] || changes[protectedKey] || changes[frozenKey]) {
+      photoCandidates = photoNames();
+      collectLoadedPhotos();
+    }
+    if (veil.hidden) return;
     const history = changes['follow-studio-follow-queue'];
-    if (changes['follow-studio-relationships'] || history?.oldValue?.history?.length !== history?.newValue?.history?.length) {
+    if (changes['follow-studio-relationships'] || changes['follow-studio-observed-photos'] ||
+        history?.oldValue?.history?.length !== history?.newValue?.history?.length) {
       void refreshProfileDetails();
     }
   });
