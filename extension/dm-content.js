@@ -198,6 +198,23 @@ globalThis.FollowStudioMessages = (() => {
     return bounds.height > 0 && bounds.bottom > viewport.top && bounds.top < viewport.bottom;
   }
 
+  function historyPosition(scroller) {
+    const viewport = scroller.getBoundingClientRect();
+    const height = scroller.scrollHeight;
+    const start = getComputedStyle(scroller).flexDirection === 'column-reverse' ?
+      Math.min(0, scroller.clientHeight - height) : 0;
+    const first = messageRows(scroller).filter(row => withinViewport(row, scroller))
+      .reduce((oldest, row) => !oldest || row.getBoundingClientRect().top < oldest.getBoundingClientRect().top ? row : oldest, null);
+    const loading = [...scroller.querySelectorAll('[role="progressbar"], [aria-busy="true"]')]
+      .some(element => visible(element) && element.getBoundingClientRect().top < viewport.bottom);
+    return {top: scroller.scrollTop, start, height, viewportHeight: viewport.height,
+      first: first?.getAttribute('data-message-id') || first?.textContent, loading};
+  }
+
+  function historyChanged(before, after) {
+    return Math.abs(before.top - after.top) >= 2 || before.height !== after.height || before.first !== after.first;
+  }
+
   function moreButton(row) {
     return [...row.querySelectorAll('button, [role="button"]')].find(button => {
       if (!usable(button)) return false;
@@ -411,11 +428,11 @@ globalThis.FollowStudioMessages = (() => {
       scroller.scrollTop = getComputedStyle(scroller).flexDirection === 'column-reverse' ?
         0 : Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       await delay(1400);
-      let stableTop = 0;
-      let stalledTop = 0;
+      let idleChecks = 0;
+      let edgeRetries = 0;
+      let retryFrom;
       let skipped = 0;
       let scrolled = false;
-      let historyRetries = 0;
       const attempted = new WeakMap();
       const checkedReactions = new WeakMap();
       const eligible = item => withinViewport(item, scroller) && (
@@ -428,8 +445,9 @@ globalThis.FollowStudioMessages = (() => {
         if (currentRoot !== root || currentScroller !== scroller) {
           root = currentRoot;
           scroller = currentScroller;
-          stableTop = 0;
-          stalledTop = 0;
+          idleChecks = 0;
+          edgeRetries = 0;
+          retryFrom = undefined;
         }
         const row = messageRows(scroller).reverse().find(eligible);
         if (row) {
@@ -441,8 +459,9 @@ globalThis.FollowStudioMessages = (() => {
               await send('dm-finish', {id, reactionVerified: true});
               return;
             }
-            stableTop = 0;
-            stalledTop = 0;
+            idleChecks = 0;
+            edgeRetries = 0;
+            retryFrom = undefined;
             continue;
           }
           try {
@@ -470,43 +489,47 @@ globalThis.FollowStudioMessages = (() => {
               }
             }
           }
-          stableTop = 0;
-          stalledTop = 0;
+          idleChecks = 0;
+          edgeRetries = 0;
+          retryFrom = undefined;
           await delay(850);
           continue;
         }
-        const before = scroller.scrollTop;
-        const height = scroller.scrollHeight;
-        const reverse = getComputedStyle(scroller).flexDirection === 'column-reverse';
-        const oldest = reverse ? Math.min(0, scroller.clientHeight - height) : 0;
-        const oldestRow = [...messageRows(scroller)].sort((a, b) =>
-          a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
-        const oldestText = oldestRow?.textContent;
+        const before = historyPosition(scroller);
         const step = Math.max(1, Math.floor(scroller.clientHeight * 0.5));
-        scroller.scrollTop = Math.max(oldest, before - step);
+        // Virtual lists may briefly render no rows after a scroll. Wait for
+        // React to fill the viewport before moving past that part of the chat.
+        const waitingForRows = before.first === undefined && before.height > scroller.clientHeight;
+        if (!waitingForRows) scroller.scrollTop = Math.max(before.start, before.top - step);
         await delay(1400);
         requireThread(expected);
-        const loading = [...scroller.querySelectorAll('[role="progressbar"], [aria-busy="true"]')]
-          .some(element => withinViewport(element, scroller));
-        const unchanged = Math.abs(scroller.scrollTop - before) < 2 && scroller.scrollHeight === height;
-        if (Math.abs(scroller.scrollTop - before) >= 2) scrolled = true;
-        const atOldest = Math.abs(scroller.scrollTop - oldest) < 2;
-        const samePage = !oldestRow || (oldestRow.isConnected && oldestRow.textContent === oldestText);
-        stableTop = unchanged && atOldest && !loading && samePage ? stableTop + 1 : 0;
-        stalledTop = unchanged && (loading || !atOldest) ? stalledTop + 1 : 0;
-        if (!unchanged || !samePage) historyRetries = 0;
-        if (stalledTop >= 12) {
-          if (historyRetries >= 2) stop('history');
-          historyRetries++;
-          stalledTop = 0;
-          // Re-enter the older-message loading boundary if Instagram stalled.
-          scroller.scrollTop = before + step;
-          await delay(850);
-          scroller.scrollTop = Math.max(oldest, before - step);
-          await delay(1400);
+        if (conversation() !== root || !scroller.isConnected) continue;
+        const after = historyPosition(scroller);
+        if (Math.abs(after.top - before.top) >= 2) scrolled = true;
+        const previousPosition = retryFrom || before;
+        retryFrom = undefined;
+        if (historyChanged(previousPosition, after)) {
+          idleChecks = 0;
+          edgeRetries = 0;
+          continue;
         }
-        if (stableTop >= 6 && conversation() === root &&
-            !messageRows(scroller).some(eligible)) break;
+        if (++idleChecks < 6 || messageRows(scroller).some(eligible)) continue;
+        const atStart = Math.abs(after.top - after.start) < 2;
+        const canMove = scroller.scrollHeight - scroller.clientHeight >= 2 && scroller.clientHeight > 0;
+        if (canMove && edgeRetries < 2) {
+          // A write to the same scroll offset sends no scroll event. Leave
+          // the loading boundary and let the next pass approach it again.
+          edgeRetries++;
+          idleChecks = 0;
+          retryFrom = after;
+          scroller.scrollTop = after.top + step;
+          await delay(850);
+          continue;
+        }
+        const empty = /^(no messages yet|henüz mesaj yok)[.!]?$/i.test(normalize(root.textContent));
+        if (!atStart || after.loading || document.hidden || !after.viewportHeight ||
+            (after.first === undefined && !empty)) stop('history');
+        break;
       }
       await send('dm-finish', {id, skipped, scrolled});
     } catch (error) {

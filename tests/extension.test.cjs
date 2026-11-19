@@ -436,7 +436,7 @@ async function runDmWorker(env, t, variant) {
   w.document.querySelector('#incoming button').onclick = () => incomingClicks++;
   const more = outgoing.querySelector('button');
   let upwardMoves = 0;
-  if (variant === 'reverse-scroll') {
+  if (['reverse-scroll', 'delayed-edge', 'stalled-edge', 'blank-viewport'].includes(variant)) {
     const list = w.document.querySelector('[data-pagelet="IGDMessagesList"]');
     const oldest = outgoing.cloneNode(true);
     const scroller = w.document.createElement('div');
@@ -444,13 +444,27 @@ async function runDmWorker(env, t, variant) {
     scroller.append(...list.children);
     list.append(scroller);
     let top = 0;
+    let leftBoundary = false;
+    let blankUntil = 0;
+    if (variant === 'blank-viewport') {
+      for (const row of [scroller.querySelector('#incoming'), oldest]) {
+        const bounds = row.getBoundingClientRect();
+        row.getBoundingClientRect = () => elapsed < blankUntil ?
+          {...bounds, top: 100, bottom: 200} : bounds;
+      }
+    }
     Object.defineProperties(scroller, {
       clientHeight: {get: () => 100},
       scrollHeight: {get: () => confirmations ? 400 : 100},
       scrollTop: {get: () => top, set: value => {
+        if (variant === 'stalled-edge' && confirmations) return;
+        assert.ok(elapsed >= blankUntil || value === top, 'The worker advanced past an unrendered viewport');
+        if (top === -300 && value > top) leftBoundary = true;
         if (value < top) upwardMoves++;
         top = value;
-        if (upwardMoves === 1 && !oldest.isConnected && confirmations === 1) {
+        const loadOlder = variant === 'delayed-edge' ? leftBoundary && top === -300 : upwardMoves === 1;
+        if (loadOlder && !oldest.isConnected && confirmations === 1) {
+          if (variant === 'blank-viewport') blankUntil = elapsed + 4200;
           oldest.querySelector('button').onclick = () => openMessageActions(oldest);
           scroller.append(oldest);
         }
@@ -674,6 +688,27 @@ test('a hidden worker uses background waits and still verifies a message removal
   assert.ok(env.backgroundDelays.includes(650), 'The removal verification wait ran in the extension service worker');
   assert.ok(env.backgroundDelays.includes(1400), 'The scroll wait ran in the extension service worker');
   assert.equal(env.local[dmQueueKey].count, 1);
+});
+
+test('the scan revisits the oldest edge when Instagram loads older messages only on re-entry', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'delayed-edge')).confirmations, 2);
+  assert.equal(env.local[dmQueueKey].status, 'Mesaj işlemi tamamlandı.');
+});
+
+test('a virtualized viewport is allowed to render before another upward scroll', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'blank-viewport')).confirmations, 2);
+  assert.equal(env.local[dmQueueKey].status, 'Mesaj işlemi tamamlandı.');
+});
+
+test('a scroll that cannot reach the oldest edge keeps the work window open and reports an incomplete scan', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'stalled-edge')).confirmations, 1);
+  const job = env.local[dmQueueKey];
+  assert.equal(job.running, false);
+  assert.match(job.status, /Tarama tamamlanmadı/);
+  assert.ok(env.tabs.has(job.reviewTabId));
 });
 
 test('the work window stays beside Brave without taking focus and restores the previous layout on stop', async () => {

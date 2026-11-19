@@ -100,7 +100,7 @@ const dmStopReasons = {
   recipient: 'Mesaj işlemi durdu: hedef kullanıcıya ait bire bir sohbet doğrulanamadı.',
   popup: 'Mesaj işlemi durdu: küçük sohbet penceresinden tam sohbete geçilemedi.',
   search: 'Mesaj işlemi durdu: Mesajlar aramasında kullanıcı adına ait tek bir sohbet bulunamadı.',
-  history: 'Mesaj işlemi durdu: Instagram eski mesajları yüklemedi.',
+  history: 'En eski mesaj doğrulanamadı. Tarama tamamlanmadı; çalışma penceresi açık bırakıldı.',
   list: 'Mesaj işlemi durdu: Instagram mesaj listesini yüklemedi.',
   overlay: 'Mesaj işlemi durdu: Instagram’da açık bir pencere mesaj menüsünü engelliyor.',
   reaction: 'Mesaj işlemi durdu: Instagram tepki listesi doğrulanamadı.',
@@ -262,7 +262,8 @@ async function handleDm(message, sender, unfollowSession) {
         const skipped = Number.isSafeInteger(message.skipped) && message.skipped > 0 ? message.skipped : 0;
         const status = job.pending ? dmStopReasons.uncertain : error ? dmStopReasons[message.reason] :
           skipped ? skipped + ' mesaj geri alınamadı. Diğer mesajların taraması tamamlandı.' : 'Mesaj işlemi tamamlandı.';
-        await finishDmQueue(job, status, {keepTab: !job.preview && Boolean(error || skipped)});
+        const keepTab = message.reason === 'history' || (!job.preview && Boolean(error || skipped));
+        await finishDmQueue(job, status, {keepTab});
       }
       return {};
     default:
@@ -299,7 +300,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
       await openDmWorker({...job, tabId: null, documentId: null});
       return;
     }
-    await finishDmQueue(job, job.pending ? dmStopReasons.uncertain : 'Mesaj işlemi durdu: Instagram yanıt vermedi.', {keepTab: !job.preview});
+    await finishDmQueue(job, job.pending ? dmStopReasons.uncertain : 'Mesaj işlemi durdu: Instagram yanıt vermedi.', {keepTab: Boolean(job.thread)});
   });
 });
 
