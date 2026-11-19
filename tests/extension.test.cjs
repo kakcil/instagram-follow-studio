@@ -545,7 +545,7 @@ async function runDmWorker(env, t, variant) {
       w.document.body.append(dialog);
       const chat = dialog.querySelector('button');
       chat.onclick = () => {
-        assert.equal(dialog.querySelectorAll('[aria-label^="Remove "]').length, 1);
+        assert.equal(dialog.querySelectorAll('svg[aria-label^="Remove "]').length, 1);
         assert.equal(env.local[dmQueueKey].pending, false);
         w.history.pushState(null, '', url);
         env.tabs.get(job.tabId).url = url;
@@ -560,7 +560,7 @@ async function runDmWorker(env, t, variant) {
           result.remove();
           dialog.querySelector('input').value = '';
           const chip = w.document.createElement('button');
-          chip.setAttribute('aria-label', 'Remove Fixture display name');
+          chip.innerHTML = '<svg aria-label="Remove Fixture display name"><title>Remove Fixture display name</title></svg>';
           dialog.append(chip);
           chat.disabled = false;
         };

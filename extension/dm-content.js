@@ -280,7 +280,11 @@ globalThis.FollowStudioMessages = (() => {
           return dialogs.length === 1 ? dialogs[0] : null;
         }, null, 15000, 'search');
         const selectedRecipients = () => [...dialog.querySelectorAll('button,[role="button"]')]
-          .filter(button => usable(button) && /^(remove |kaldır )/i.test(button.getAttribute('aria-label') || ''));
+          .filter(button => usable(button) && [
+            button.getAttribute('aria-label'),
+            button.querySelector('svg[aria-label]')?.getAttribute('aria-label'),
+            button.textContent
+          ].some(label => /^(remove |kaldır )/i.test(normalize(label))));
         if (selectedRecipients().length || dialog.querySelector('input[type="checkbox"]:checked')) stop('recipient');
         const input = await waitFor(() => {
           const inputs = [...dialog.querySelectorAll('input')].filter(element => usable(element) &&
