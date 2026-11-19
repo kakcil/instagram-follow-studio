@@ -337,7 +337,7 @@ test('the Messages tab defaults to unsending and removing reactions after the us
   assert.equal(job.username, 'fixture_target');
   assert.equal(job.options.messages, true);
   assert.equal(job.options.reactions, true);
-  assert.match(env.tabs.get(job.tabId).url, /\/fixture_target\//);
+  assert.match(env.tabs.get(job.tabId).url, /\/direct\/inbox\//);
   assert.equal(job.thread, null);
   assert.equal(job.running, true);
   assert.match(panel.querySelector('[data-dm-status]').textContent, /Message job running in the background/);
@@ -537,17 +537,22 @@ async function runDmWorker(env, t, variant) {
     const chatPage = w.document.querySelector('main');
     env.tabs.get(job.tabId).url = profileUrl;
     w.history.replaceState(null, '', profileUrl);
-    w.document.body.innerHTML = '<main><header><h2>fixture_target</h2><button>Message</button></header></main>';
-    w.document.querySelector('button').onclick = () => {
-      const popup = w.document.createElement('div');
-      popup.innerHTML = '<div><div role="button"><svg aria-label="Expand"></svg></div><div role="button"><svg aria-label="Close"></svg></div></div><div contenteditable="true"></div>';
-      popup.querySelector('[role="button"]').onclick = () => {
+    w.document.body.innerHTML = '<main><nav aria-label="Thread list"><input aria-label="Search"></nav></main>';
+    w.document.querySelector('input').oninput = event => {
+      assert.equal(event.target.value, 'fixture_target');
+      const result = w.document.createElement('button');
+      result.innerHTML = '<span>fixture_target</span><span>Last message preview</span>';
+      result.onclick = () => {
         assert.equal(env.local[dmQueueKey].pending, false);
         w.history.pushState(null, '', url);
         env.tabs.get(job.tabId).url = url;
         w.document.body.replaceChildren(chatPage);
       };
-      w.document.body.append(popup);
+      const other = w.document.createElement('button');
+      other.innerHTML = '<span>fixture_target_extra</span>';
+      other.onclick = () => assert.fail('A partial username match was opened');
+      w.document.querySelector('nav').append(other);
+      w.document.querySelector('nav').append(result);
     };
   }
   w.chrome = {runtime: {sendMessage: message => {
@@ -605,7 +610,7 @@ test('the worker finds Instagram’s dialog popover, nested Unsend label and sep
   assert.equal(env.local[dmQueueKey].running, false);
 });
 
-test('the message worker opens the full thread from a profile chat popup, verifies the recipient and keeps going after rerender', async t => {
+test('the message worker searches Messages by exact username, opens the thread and keeps going after rerender', async t => {
   const wrong = environment();
   assert.equal((await runDmWorker(wrong, t, 'wrong')).confirmations, 0);
   assert.match(wrong.local[dmQueueKey].status, /doğrulanamadı/);

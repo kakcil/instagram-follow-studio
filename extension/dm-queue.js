@@ -13,7 +13,7 @@ function dmThread(url) {
 }
 
 function dmWorkerURL(job) {
-  const path = job.thread ? '/direct/t/' + job.thread + '/' : '/' + job.username + '/';
+  const path = job.thread ? '/direct/t/' + job.thread + '/' : '/direct/inbox/';
   return 'https://www.instagram.com' + path + '?follow_studio_dm_job=' + job.id;
 }
 
@@ -99,6 +99,7 @@ const dmStopReasons = {
   restricted: 'Mesaj işlemi durdu: Instagram bir kısıtlama gösterdi.',
   recipient: 'Mesaj işlemi durdu: hedef kullanıcıya ait bire bir sohbet doğrulanamadı.',
   popup: 'Mesaj işlemi durdu: küçük sohbet penceresinden tam sohbete geçilemedi.',
+  search: 'Mesaj işlemi durdu: Mesajlar aramasında kullanıcı adına ait tek bir sohbet bulunamadı.',
   history: 'Mesaj işlemi durdu: Instagram eski mesajları yüklemedi.',
   list: 'Mesaj işlemi durdu: Instagram mesaj listesini yüklemedi.',
   overlay: 'Mesaj işlemi durdu: Instagram’da açık bir pencere mesaj menüsünü engelliyor.',
@@ -215,7 +216,7 @@ async function handleDm(message, sender, unfollowSession) {
     return {thread: currentThread, preview: job.preview, options: job.options};
   }
   if (message.type === 'dm-resolve-error' && !job.thread) {
-    const reason = ['restricted', 'popup'].includes(message.reason) ? message.reason : 'recipient';
+    const reason = ['restricted', 'search'].includes(message.reason) ? message.reason : 'recipient';
     await finishDmQueue(job, dmStopReasons[reason]);
     return {};
   }

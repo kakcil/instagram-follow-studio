@@ -13,14 +13,6 @@ globalThis.FollowStudioMessages = (() => {
   const reactionTitles = new Set(['reactions', 'tepkiler', 'reaksiyonlar', 'ifadeler']);
   const reactionRemovalLabels = new Set(['select to remove', 'click to remove', 'kaldırmak için seç', 'kaldırmak için tıkla']);
   const closeLabels = new Set(['close', 'kapat']);
-  const messageLabels = new Set(['message', 'mesaj', 'mesaj gönder', 'send message']);
-  const expandChatLabels = new Set([
-    'expand', 'expand chat', 'expand conversation', 'open in inbox', 'open in messages',
-    'open chat in full screen', 'open in full screen', 'open in full view', 'open full conversation',
-    'open in full chat', 'open in full page', 'view in inbox', 'open conversation',
-    'büyüt', 'sohbeti büyüt', 'sohbeti genişlet', 'tam ekranda aç', 'sohbeti tam ekranda aç',
-    'gelen kutusunda aç', 'mesajlarda aç', 'sohbeti aç'
-  ]);
   const moreLabel = /^(see more options for message|more options|mesaj için daha fazla seçenek|daha fazla seçenek|altre opzioni|más opciones|plus d.options|weitere optionen|mais opções)(?:\b|\s|$)/iu;
   const restrictedText = /try again later|we (?:restrict|limit)|too many requests|action blocked|daha sonra tekrar dene|işlem engellendi|çok fazla istek/i;
   const thread = () => location.pathname.match(/^\/direct\/t\/(\d+)\/?$/)?.[1];
@@ -248,50 +240,6 @@ globalThis.FollowStudioMessages = (() => {
     return url.origin === location.origin ? url.pathname.match(/^\/([a-z0-9._]+)\/?$/i)?.[1].toLowerCase() : null;
   }
 
-  function directThreadPath(link) {
-    const url = new URL(link.href, location.href);
-    return url.origin === location.origin && /^\/direct\/t\/\d+\/?$/.test(url.pathname) ? url.pathname : null;
-  }
-
-  function chatSurfaces() {
-    return [...document.querySelectorAll('[role="dialog"], dialog[open], [data-pagelet="IGDChatTab"], [data-pagelet="IGDChatTabContainer"]')]
-      .filter(visible);
-  }
-
-  function expansionControls(root) {
-    return [...root.querySelectorAll('button, [role="button"], a[href]')].filter(control => {
-      if (!usable(control) || control.closest(messageLists)) return false;
-      const labels = [control.getAttribute('aria-label'), control.getAttribute('title'), control.textContent,
-        control.querySelector('svg[aria-label]')?.getAttribute('aria-label'), control.querySelector('svg title')?.textContent];
-      return labels.some(label => expandChatLabels.has(normalize(label)));
-    });
-  }
-
-  function chatExpansion(existingSurfaces, existingControls) {
-    const fresh = chatSurfaces().filter(surface => !existingSurfaces.has(surface));
-    const candidates = fresh.filter(surface => !fresh.some(other => other !== surface && surface.contains(other)));
-    if (!candidates.length) {
-      const controls = expansionControls(document).filter(control => {
-        if (existingControls.has(control)) return false;
-        for (let node = control.parentElement; node && node !== document.body; node = node.parentElement) {
-          if (node.querySelector('[contenteditable="true"]') &&
-              [...node.querySelectorAll('svg[aria-label]')].some(icon =>
-                /^(close|kapat)$/i.test(icon.getAttribute('aria-label')))) return true;
-        }
-        return false;
-      });
-      return controls.length === 1 ? {control: controls[0]} : null;
-    }
-    if (candidates.length !== 1) return null;
-    const popup = candidates[0];
-    const header = popup.querySelector('header, [role="banner"], [data-pagelet="IGDThreadHeader"]');
-    const scope = header || popup;
-    const paths = new Set([...scope.querySelectorAll('a[href]')].filter(visible).map(directThreadPath).filter(Boolean));
-    if (paths.size === 1) return {path: [...paths][0]};
-    const controls = expansionControls(scope);
-    return controls.length === 1 ? {control: controls[0]} : null;
-  }
-
   function recipientMatches(username) {
     const list = conversation();
     if (!list) return false;
@@ -315,21 +263,27 @@ globalThis.FollowStudioMessages = (() => {
     let options;
     try {
       if (!thread()) {
-        const existingSurfaces = new Set(chatSurfaces());
-        const existingControls = new Set(expansionControls(document));
-        const message = await waitFor(() => {
-          if (location.pathname.replace(/\/$/, '').toLowerCase() !== '/' + username) stop('recipient');
-          const main = document.querySelector('main, [role="main"]');
-          return main && labeledControl(main, messageLabels);
-        }, null, 25000, 'recipient');
-        message.click();
-        const navigation = await waitFor(() => thread() ? {arrived: true} : chatExpansion(existingSurfaces, existingControls),
-          null, 25000, 'popup');
-        if (navigation.path) {
-          location.assign(navigation.path);
-          return;
-        }
-        if (navigation.control) navigation.control.click();
+        if (!/^\/direct\/inbox\/?$/.test(location.pathname)) stop('recipient');
+        const input = await waitFor(() => {
+          const inputs = [...document.querySelectorAll('input')].filter(element => usable(element) &&
+            /^(search|ara)$/i.test(element.getAttribute('aria-label') || element.getAttribute('placeholder') || ''));
+          return inputs.length === 1 ? inputs[0] : null;
+        }, null, 30000, 'search');
+        const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        setValue.call(input, username);
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+        await delay(1000);
+        const result = await waitFor(() => {
+          const matches = [...document.querySelectorAll('button,[role="button"],a[href]')].filter(element => {
+            if (!usable(element) || element.closest(messageLists)) return false;
+            return [element, ...element.querySelectorAll('span,div')].some(label =>
+              !label.childElementCount && normalize(label.textContent).replace(/^@/, '') === username);
+          });
+          const rows = matches.filter(element => !matches.some(other => other !== element && element.contains(other)));
+          return rows.length === 1 ? rows[0] : null;
+        }, null, 30000, 'search');
+        result.click();
       }
       await waitFor(() => thread() && recipientMatches(username), null, 35000, 'recipient');
       ({thread: target, preview, options} = await send('dm-bind', {id, username}));

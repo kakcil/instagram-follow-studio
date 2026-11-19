@@ -61,6 +61,7 @@ globalThis.FollowStudioI18n = (() => {
     "Mesajlar": "Messages",
     "Mesajları geri al": "Unsend messages",
     "Sohbeti kontrol et": "Check chat",
+    "Mesaj işlemi durdu: Mesajlar aramasında kullanıcı adına ait tek bir sohbet bulunamadı.": "Could not find one matching conversation for the username in Messages search. The job stopped.",
     "Karşı tarafın mesajlarına verdiğim tepkileri kaldır.": "Remove my reactions from the other person's messages.",
     "Mesajları geri al ve tepkileri kaldır": "Unsend messages and remove reactions",
     "Yalnızca tepkileri kaldır": "Remove reactions only",
