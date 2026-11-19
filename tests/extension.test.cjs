@@ -537,22 +537,39 @@ async function runDmWorker(env, t, variant) {
     const chatPage = w.document.querySelector('main');
     env.tabs.get(job.tabId).url = profileUrl;
     w.history.replaceState(null, '', profileUrl);
-    w.document.body.innerHTML = '<main><nav aria-label="Thread list"><input aria-label="Search"></nav></main>';
-    w.document.querySelector('input').oninput = event => {
-      assert.equal(event.target.value, 'fixture_target');
-      const result = w.document.createElement('button');
-      result.innerHTML = '<span>fixture_target</span><span>Last message preview</span>';
-      result.onclick = () => {
+    w.document.body.innerHTML = '<main><button><svg aria-label="New message"></svg></button></main>';
+    w.document.querySelector('button').onclick = () => {
+      const dialog = w.document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      dialog.innerHTML = '<input name="queryBox" placeholder="Search..."><button disabled>Chat</button>';
+      w.document.body.append(dialog);
+      const chat = dialog.querySelector('button');
+      chat.onclick = () => {
+        assert.equal(dialog.querySelectorAll('[aria-label^="Remove "]').length, 1);
         assert.equal(env.local[dmQueueKey].pending, false);
         w.history.pushState(null, '', url);
         env.tabs.get(job.tabId).url = url;
         w.document.body.replaceChildren(chatPage);
       };
-      const other = w.document.createElement('button');
-      other.innerHTML = '<span>fixture_target_extra</span>';
-      other.onclick = () => assert.fail('A partial username match was opened');
-      w.document.querySelector('nav').append(other);
-      w.document.querySelector('nav').append(result);
+      dialog.querySelector('input').oninput = event => {
+        assert.equal(event.target.value, 'fixture_target');
+        const result = w.document.createElement('div');
+        result.setAttribute('role', 'option');
+        result.innerHTML = '<span>Fixture display name</span><span>fixture_target</span><input type="checkbox">';
+        result.onclick = () => {
+          result.remove();
+          dialog.querySelector('input').value = '';
+          const chip = w.document.createElement('button');
+          chip.setAttribute('aria-label', 'Remove Fixture display name');
+          dialog.append(chip);
+          chat.disabled = false;
+        };
+        const other = w.document.createElement('div');
+        other.setAttribute('role', 'option');
+        other.innerHTML = '<span>fixture_target_extra</span><input type="checkbox">';
+        other.onclick = () => assert.fail('A partial username match was opened');
+        dialog.append(other, result);
+      };
     };
   }
   w.chrome = {runtime: {sendMessage: message => {
@@ -610,7 +627,7 @@ test('the worker finds Instagram’s dialog popover, nested Unsend label and sep
   assert.equal(env.local[dmQueueKey].running, false);
 });
 
-test('the message worker searches Messages by exact username, opens the thread and keeps going after rerender', async t => {
+test('the message worker uses New message, selects exactly one recipient and presses Chat before processing', async t => {
   const wrong = environment();
   assert.equal((await runDmWorker(wrong, t, 'wrong')).confirmations, 0);
   assert.match(wrong.local[dmQueueKey].status, /doğrulanamadı/);

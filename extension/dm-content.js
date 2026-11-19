@@ -264,9 +264,27 @@ globalThis.FollowStudioMessages = (() => {
     try {
       if (!thread()) {
         if (!/^\/direct\/inbox\/?$/.test(location.pathname)) stop('recipient');
+        const compose = await waitFor(() => {
+          const buttons = [...document.querySelectorAll('button,[role="button"]')].filter(button => {
+            if (!usable(button)) return false;
+            return [button.getAttribute('aria-label'), button.textContent,
+              button.querySelector('svg[aria-label]')?.getAttribute('aria-label')]
+              .some(label => /^(new message|yeni mesaj)$/i.test(normalize(label)));
+          });
+          return buttons.length === 1 ? buttons[0] : null;
+        }, null, 30000, 'search');
+        compose.click();
+        const dialog = await waitFor(() => {
+          const dialogs = visibleDialogs().filter(dialog => dialog.querySelector('input[name="queryBox"]') ||
+            [...dialog.querySelectorAll('input')].some(input => /^(search|ara)\.{0,3}$/i.test(input.placeholder)));
+          return dialogs.length === 1 ? dialogs[0] : null;
+        }, null, 15000, 'search');
+        const selectedRecipients = () => [...dialog.querySelectorAll('button,[role="button"]')]
+          .filter(button => usable(button) && /^(remove |kaldır )/i.test(button.getAttribute('aria-label') || ''));
+        if (selectedRecipients().length || dialog.querySelector('input[type="checkbox"]:checked')) stop('recipient');
         const input = await waitFor(() => {
-          const inputs = [...document.querySelectorAll('input')].filter(element => usable(element) &&
-            /^(search|ara)$/i.test(element.getAttribute('aria-label') || element.getAttribute('placeholder') || ''));
+          const inputs = [...dialog.querySelectorAll('input')].filter(element => usable(element) &&
+            (element.name === 'queryBox' || /^(search|ara)\.{0,3}$/i.test(element.placeholder)));
           return inputs.length === 1 ? inputs[0] : null;
         }, null, 30000, 'search');
         const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -275,7 +293,7 @@ globalThis.FollowStudioMessages = (() => {
         input.dispatchEvent(new Event('change', {bubbles: true}));
         await delay(1000);
         const result = await waitFor(() => {
-          const matches = [...document.querySelectorAll('button,[role="button"],a[href]')].filter(element => {
+          const matches = [...dialog.querySelectorAll('[role="option"]')].filter(element => {
             if (!usable(element) || element.closest(messageLists)) return false;
             return [element, ...element.querySelectorAll('span,div')].some(label =>
               !label.childElementCount && normalize(label.textContent).replace(/^@/, '') === username);
@@ -283,7 +301,15 @@ globalThis.FollowStudioMessages = (() => {
           const rows = matches.filter(element => !matches.some(other => other !== element && element.contains(other)));
           return rows.length === 1 ? rows[0] : null;
         }, null, 30000, 'search');
+        const selection = result.querySelector('input[type="checkbox"]');
+        if (!selection || selection.checked) stop('recipient');
         result.click();
+        const chat = await waitFor(() => {
+          const button = labeledControl(dialog, new Set(['chat', 'sohbet', 'sohbet et']));
+          return selectedRecipients().length === 1 && button ? button : null;
+        }, null, 10000, 'search');
+        if (selectedRecipients().length !== 1) stop('recipient');
+        chat.click();
       }
       await waitFor(() => thread() && recipientMatches(username), null, 35000, 'recipient');
       ({thread: target, preview, options} = await send('dm-bind', {id, username}));
