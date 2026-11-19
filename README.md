@@ -164,13 +164,13 @@ Keep the Instagram ZIP private. You do not need to send it to us or upload it to
 
 ## Start the unfollow queue
 
-Select **Başlat** to process the candidates in the current list for the signed-in account. Protected accounts and followers present in the ZIP are skipped. Automatic relationship scanning remains off.
+Select **Başlat** to process candidates from the imported ZIP for the signed-in account. Protected accounts and followers listed in that ZIP are skipped.
 
 Your list is saved on this computer. You can reopen the panel later without choosing the same ZIP again. **Importing a new ZIP replaces the main list and the last run's results; protected and unavailable accounts are kept.**
 
 ## Track follower and mutual-follow changes
 
-Open **Takipleşme** and expand **Instagram JSON arşivinden kayıt al**. Enter your Instagram username and choose an all-time JSON ZIP containing both complete lists. Enter the archive's preparation date, confirm it belongs to your account, then click **Arşivi kaydet ve karşılaştır**. Later archives must have a newer date. This import is separate from the unfollow list.
+Open **Takipleşme** and upload an all-time Instagram JSON ZIP containing both complete lists. Enter your Instagram username and the archive's preparation date, confirm it belongs to your account, then click **Arşivi kaydet ve karşılaştır**. Later archives must have a newer date. This import is separate from the unfollow list.
 
 The first snapshot establishes a baseline; it cannot reconstruct earlier changes. Subsequent snapshots record names missing from the followers or following list. Filter with **Tüm değişiklikler** (all changes), **Takipçi listenden çıkanlar** (lost followers), or **Biten takipleşmeler** (ended mutual follows). Expand **Kontrol tarihleri** to review snapshot dates.
 

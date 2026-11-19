@@ -63,19 +63,16 @@ globalThis.FollowStudioRelationships = (() => {
   function createView(panel, readArchive) {
     const view = document.createElement('section');
     view.innerHTML = `
-      <p class="manual-hint">Takipçilerini ve takip ettiklerini kaydet. Sonraki kontrolde listeler karşılaştırılır.</p>
-      <p class="manual-hint">Otomatik canlı tarama kapatıldı.</p>
-      <details data-relationship-archive><summary>Instagram JSON arşivinden kayıt al</summary>
-        <p class="manual-hint">Instagram arşivini JSON biçiminde, tüm zamanlar seçili ve takipçiler ile takip edilenler dahil olacak şekilde indir. Hazırlanma tarihi kaydın tarihi olarak kullanılır.</p>
-        <form data-relationship-import>
-          <label>Instagram kullanıcı adın <input name="username" type="text" autocomplete="off" spellcheck="false" placeholder="@kullanici" required></label>
-          <label>Instagram ZIP dosyası <input type="file" name="archive" accept=".zip" required></label>
-          <label>Arşivin hazırlanma tarihi <input type="datetime-local" name="archiveDate" required></label>
-          <label><input type="checkbox" name="allTime" required> Bu arşiv kendi hesabıma ait. Tüm zamanları ve iki tam listeyi içeriyor.</label>
-          <button class="secondary" type="submit">Arşivi kaydet ve karşılaştır</button>
-          <p data-relationship-import-status class="manual-hint" role="status"></p>
-        </form>
-      </details>
+      <p class="manual-hint">Takipçi ve takip edilen listelerini karşılaştırmak için Instagram JSON arşivlerini yükle.</p>
+      <p class="manual-hint">Instagram arşivini JSON biçiminde, tüm zamanlar seçili ve takipçiler ile takip edilenler dahil olacak şekilde indir. Hazırlanma tarihi kaydın tarihi olarak kullanılır.</p>
+      <form data-relationship-import>
+        <label>Instagram kullanıcı adın <input name="username" type="text" autocomplete="off" spellcheck="false" placeholder="@kullanici" required></label>
+        <label>Instagram ZIP dosyası <input type="file" name="archive" accept=".zip" required></label>
+        <label>Arşivin hazırlanma tarihi <input type="datetime-local" name="archiveDate" required></label>
+        <label><input type="checkbox" name="allTime" required> Bu arşiv kendi hesabıma ait. Tüm zamanları ve iki tam listeyi içeriyor.</label>
+        <button class="secondary" type="submit">Arşivi kaydet ve karşılaştır</button>
+        <p data-relationship-import-status class="manual-hint" role="status"></p>
+      </form>
       <p data-relationship-status role="status" class="manual-hint"></p>
       <p data-relationship-summary class="manual-hint"></p>
       <select data-relationship-filter aria-label="Değişiklikleri filtrele"><option value="all">Tüm değişiklikler</option>
@@ -145,7 +142,7 @@ globalThis.FollowStudioRelationships = (() => {
           localize((saved.latest.source === 'archive' ? 'Arşiv tarihi ' : 'Son kayıt ') + date(saved.latest.at)) +
           ' · ' + localize(saved.latest.followers + ' takipçi · ' + saved.latest.following + ' takip edilen') : '';
         renderEvents();
-        find('[data-relationship-scans]').replaceChildren(...(saved?.scans || []).slice().reverse().map(scan => {
+        find('[data-relationship-scans]').replaceChildren(...(saved?.scans || []).slice().sort((a,b) => b.at - a.at).map(scan => {
           const row = document.createElement('li');
           row.textContent = [date(scan.at), localize(scan.source === 'archive' ? 'Arşiv' : 'Canlı tarama'),
             localize(scan.followers + ' takipçi · ' + scan.following + ' takip edilen')].join(' · ');

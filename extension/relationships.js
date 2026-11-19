@@ -42,8 +42,9 @@ function validRelationshipList(names, count) {
 }
 
 async function saveRelationshipSnapshot(data, saved, account, username, snapshot, photos = saved?.photos) {
-  if (saved && snapshot.at <= saved.latest.at) throw new Error('Yeni kaydın tarihi son kayıttan daha yeni olmalı.');
-  const changes = relationshipChanges(saved?.latest, snapshot);
+  const baseline = saved?.latest.source === 'archive' ? saved.latest : undefined;
+  if (baseline && snapshot.at <= baseline.at) throw new Error('Yeni kaydın tarihi son kayıttan daha yeni olmalı.');
+  const changes = relationshipChanges(baseline, snapshot);
   const record = {account, username, latest: snapshot, photos,
     scans: [...(saved?.scans || []), {at: snapshot.at, followers: snapshot.followers.length,
       following: snapshot.following.length, changes: changes.length, source: snapshot.source}],
@@ -94,7 +95,7 @@ async function handleRelationships(message, sender) {
     following: message.following.slice().sort(), source: 'archive'};
   const changes = await saveRelationshipSnapshot(data, saved, account, username, snapshot);
   await chrome.storage.local.set({[relationshipJobKey]: {account, username, running: false,
-    status: saved ? 'Arşiv kaydedildi. ' + changes + ' değişiklik bulundu.' : 'İlk arşiv kaydı oluşturuldu.'}});
+    status: saved?.latest.source === 'archive' ? 'Arşiv kaydedildi. ' + changes + ' değişiklik bulundu.' : 'İlk arşiv kaydı oluşturuldu.'}});
   return {changes};
 }
 

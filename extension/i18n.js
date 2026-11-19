@@ -105,6 +105,7 @@ globalThis.FollowStudioI18n = (() => {
     "Mesaj işlemi durdu: Instagram yanıt vermedi.": "Instagram did not respond. The message job stopped.",
     "Mesaj işlemi durdu: tarayıcı yeniden açıldı.": "The browser restarted. The message job stopped.",
     "Otomatik canlı tarama kapatıldı.": "Automatic live scanning is off.",
+    "Takipçi ve takip edilen listelerini karşılaştırmak için Instagram JSON arşivlerini yükle.": "Upload Instagram JSON archives to compare followers and following.",
     "Otomatik canlı tarama kapatıldı. Önceki kayıt korundu.": "Automatic live scanning is off. The previous snapshot was kept.",
     "Başlat, açık listedeki ZIP adaylarını sırayla işler.": "Start processes the ZIP candidates in the current list.",
     "Instagram hesabı işlem sırasında değişti.": "The Instagram account changed during the run.",

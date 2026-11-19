@@ -239,7 +239,6 @@ async function handleFollow(message, sender, unfollowSession) {
       return {};
     }
     case 'follow-start': {
-      if ((await relationshipJob())?.running) throw new Error('Önce takipleşme taramasını durdur.');
       if ((await readDmQueue())?.running) throw new Error('Önce mesaj işlemini durdur.');
       if (state.running) return {};
       if (unfollowSession.owner !== null && await alive(unfollowSession.owner)) throw new Error('Takip bırakma çalışmasını önce durdur.');

@@ -3,7 +3,6 @@
 const jobKey = 'local-unfollow-job';
 const sessionKey = 'follow-studio-session';
 const photoCacheKey = 'follow-studio-observed-photos';
-const unfollowScanMaxAge = 10 * 60 * 1000;
 const newSession = () => ({owner: null, workers: {}, pendingOpen: {}});
 let operations = Promise.resolve();
 importScripts('follow-queue.js');
@@ -19,17 +18,6 @@ async function alive(tabId) { try { await chrome.tabs.get(tabId); return true; }
 
 function validUnfollowArchive(archive) {
   return !archive?.archiveWarning && Array.isArray(archive?.followerNames) && Array.isArray(archive.followingNames);
-}
-
-function recentCheck(at) {
-  const age = Date.now() - at;
-  return Number.isFinite(age) && age >= 0 && age < unfollowScanMaxAge;
-}
-
-async function liveUnfollowSnapshot(account) {
-  const data = (await chrome.storage.local.get(relationshipsKey))[relationshipsKey];
-  const snapshot = data?.accounts.find(record => sameFollowAccount(record.account, account))?.latest;
-  return snapshot?.source === 'live' && recentCheck(snapshot.at) ? snapshot : null;
 }
 
 const unfollowDataKeys = ['follow-studio-cache', 'follow-studio-protected'];
@@ -48,15 +36,6 @@ async function verifyUnfollowCandidate(sender, state, username, data) {
   }
   if (archive.followerNames.includes(username) || !archive.followingNames.includes(username)) {
     throw Object.assign(new Error('ZIP takipçi doğrulaması başarısız; işlem yapılmadı.'), {outcome: 'follower'});
-  }
-  if (run.liveAt == null) return;
-  const snapshot = await liveUnfollowSnapshot(account);
-  if (snapshot?.at !== run.liveAt) throw new Error('Canlı doğrulamanın süresi doldu. Kuyruğu yeniden başlat.');
-  if (snapshot.followers.includes(username)) {
-    throw Object.assign(new Error('Canlı listede seni takip ediyor; atlandı.'), {outcome: 'follower'});
-  }
-  if (!snapshot.following.includes(username)) {
-    throw Object.assign(new Error('Canlı takip edilenler listesinde doğrulanamadı; atlandı.'), {outcome: 'unverified'});
   }
 }
 
@@ -79,7 +58,6 @@ async function handle(message, sender) {
       'follow-studio-protected', 'follow-studio-frozen']);
     const data = storage[relationshipsKey];
     const saved = data?.accounts.find(record => sameFollowAccount(record.account, account));
-    const scan = await relationshipJob();
     const names = new Set((storage['follow-studio-cache']?.items || []).map(item => item.name));
     for (const name of Object.keys(storage['follow-studio-protected'] || {})) names.add(name);
     for (const name of Object.keys(storage['follow-studio-frozen'] || {})) names.add(name);
@@ -91,8 +69,7 @@ async function handle(message, sender) {
       await chrome.storage.local.set({[photoCacheKey]: {account,
         photos: verifiedRelationshipPhotos(names, {...observed, ...newPhotos})}});
     }
-    const photos = {...saved?.photos, ...(sameFollowAccount(scan?.account, account) ? scan.photos : {}),
-      ...observed, ...newPhotos};
+    const photos = {...saved?.photos, ...observed, ...newPhotos};
     const queue = await readFollowQueue();
     const followedAt = new Map();
     if (sameFollowAccount(queue.account, account)) {
@@ -107,14 +84,12 @@ async function handle(message, sender) {
   if (message.type === 'studio-claim') {
     if (sender.frameId !== 0) throw new Error('İşlem ana sekmeden başlatılmalı.');
     if (state.owner !== null && await alive(state.owner)) return {claimed: false};
-    if ((await relationshipJob())?.running) throw new Error('Önce takipleşme taramasını durdur.');
     if ((await readFollowQueue()).running) throw new Error('Takip kuyruğunu önce durdur.');
     if ((await readDmQueue())?.running) throw new Error('Önce mesaj işlemini durdur.');
     const archive = (await chrome.storage.local.get('follow-studio-cache'))['follow-studio-cache'];
     if (!validUnfollowArchive(archive)) throw new Error('Önce tüm zamanları içeren takipçi JSON ZIP’ini yükle.');
     const account = await senderFollowAccount(sender);
-    const snapshot = await liveUnfollowSnapshot(account);
-    state.unfollowRun = {account, archiveAt: archive.importedAt, filename: archive.filename, liveAt: snapshot?.at};
+    state.unfollowRun = {account, archiveAt: archive.importedAt, filename: archive.filename};
     state.owner = tabId;
     await save(state);
     return {claimed: true};

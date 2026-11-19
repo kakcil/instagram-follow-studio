@@ -184,7 +184,7 @@ test('panel uses Instagram page language for all tools, archive details and queu
       assert.match(panel.querySelector('#studio-view-unfollow').textContent, /Start processes the ZIP candidates in the current list/);
       panel.querySelector('#studio-tab-relationships').click();
       await new Promise(resolve => setImmediate(resolve));
-      assert.equal(panel.querySelector('[data-relationship-archive] summary').textContent, 'Import an Instagram JSON archive');
+      assert.match(panel.querySelector('#studio-view-relationships').textContent, /Upload Instagram JSON archives to compare followers and following/);
     }
   }
 });
@@ -745,7 +745,7 @@ test('background owns worker tabs, rejects concurrent controllers, rechecks foll
   assert.equal((await check()).ok, false, 'A different Instagram account cannot reuse authorization');
   env.setAccount('1001');
   await env.storage.local.set({[relationshipsKey]: unfollowRelationshipFixture({at: Date.now() - 11 * 60000})});
-  assert.equal((await check()).ok, false, 'An expired scan cannot authorize the next click');
+  assert.equal((await check()).ok, true, 'The imported ZIP authorizes candidates independently of old scans');
   await env.storage.local.set({[relationshipsKey]: unfollowRelationshipFixture()});
   assert.equal((await env.send({type: 'studio-close-worker', tabId: 2})).ok, false);
   await env.send({type: 'studio-release'});
@@ -755,26 +755,14 @@ test('background owns worker tabs, rejects concurrent controllers, rechecks foll
   assert.equal((await env.send({type: 'studio-claim'})).claimed, true, 'Reload releases owner');
 });
 
-test('unfollow skips accounts that follow back or are missing from a complete live scan before opening a worker', async t => {
-  const names = ['fixture_follower', 'fixture_missing'];
-  const env = environment({[cacheKey]: {items: names.map(name => ({name, timestamp: 1})),
-    followingNames: names, followerNames: [], followers: 0, following: 2},
-    [relationshipsKey]: unfollowRelationshipFixture({followers: [names[0]], following: [names[0]]})});
-  const {dom, panel, w} = await app(env);
-  t.after(() => dom.window.close());
-  let workerTabs = 0;
-  env.onCreated(() => workerTabs++);
-  panel.querySelector('[data-manual] textarea').value = names.join(' ');
-  for (const mode of ['background', 'iframe']) {
-    panel.querySelector('[data-mode]').value = mode;
-    await panel.querySelector('[data-start]').onclick();
-    assert.equal(env.local[jobKey], undefined);
-    assert.equal(workerTabs, 0);
-    assert.equal(w.document.querySelector('iframe'), null);
-    assert.equal(env.local[cacheKey].items.length, 2);
-    assert.match(panel.querySelector('.activity pre').textContent, /fixture_follower: Canlı listede seni takip ediyor/);
-    assert.match(panel.querySelector('.activity pre').textContent, /fixture_missing: Canlı takip edilenler listesinde doğrulanamadı/);
-  }
+test('unfollow candidate checks use the imported ZIP when a prior live snapshot disagrees', async () => {
+  const env = environment({
+    [cacheKey]: {followingNames: ['fixture_candidate', 'fixture_follower'], followerNames: ['fixture_follower']},
+    [relationshipsKey]: unfollowRelationshipFixture({followers: ['fixture_candidate'], following: []})
+  });
+  assert.equal((await env.send({type: 'studio-claim'})).claimed, true);
+  assert.equal((await env.send({type: 'studio-verify-candidate', username: 'fixture_candidate'})).ok, true);
+  assert.equal((await env.send({type: 'studio-verify-candidate', username: 'fixture_follower'})).outcome, 'follower');
 });
 
 test('Start processes the entire current ZIP list with no per-account selection', async t => {
@@ -1408,6 +1396,7 @@ test('relationship history tab shows comparison intervals and keeps other tools 
   assert.equal(panel.querySelector('#studio-view-follow').hidden, true);
   assert.equal(panel.querySelector('#studio-view-unfollow').hidden, true);
   assert.equal(view.querySelector('[data-relationship-import] button').textContent, 'Arşivi kaydet ve karşılaştır');
+  assert.equal(view.querySelector('[data-relationship-import]').closest('details'), null);
   assert.match(view.querySelector('[data-relationship-events]').textContent, /alice/);
   assert.match(view.querySelector('[data-relationship-events]').textContent, /Önceki kontrol/);
   assert.match(view.querySelector('[data-relationship-events]').textContent, /Değişimin görüldüğü kontrol/);
@@ -1464,6 +1453,15 @@ test('relationship ZIP import compares complete archives using their supplied da
     'following.json': []}, '2026-01-03T12:00');
   assert.deepEqual(env.local['follow-studio-relationships'], original);
   assert.match(form.querySelector('[data-relationship-import-status]').textContent, /parçaları eksik/);
+});
+
+test('the first JSON archive establishes its own baseline even when an old live snapshot exists', async () => {
+  const env = environment({[relationshipsKey]: unfollowRelationshipFixture({followers: ['legacy_follower']})});
+  const at = Date.now() - 60000;
+  assert.equal((await relationshipArchive(env, ['archive_follower'], [], at)).changes, 0);
+  assert.equal((await relationshipArchive(env, [], [], at + 1)).changes, 1);
+  const record = env.local[relationshipsKey].accounts[0];
+  assert.deepEqual(record.events.map(event => event.name), ['archive_follower']);
 });
 
 test('archive snapshots reject stale dates, missing all-time confirmation and account changes', async () => {
