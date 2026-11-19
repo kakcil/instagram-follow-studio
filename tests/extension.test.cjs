@@ -398,6 +398,32 @@ async function runDmWorker(env, t, variant) {
   t.after(() => dom.window.close());
   const w = dom.window;
   const outgoing = w.document.getElementById('outgoing');
+  if (variant === 'nested-layout') {
+    const incoming = w.document.getElementById('incoming');
+    for (const row of [incoming, outgoing]) {
+      row.removeAttribute('role');
+      row.style.cssText = '';
+      const bubble = w.document.createElement('div');
+      bubble.setAttribute('aria-roledescription', 'message');
+      bubble.textContent = 'Synthetic message';
+      row.prepend(bubble);
+      const more = row.querySelector('button');
+      more.setAttribute('aria-label', 'See more options for message from ' +
+        (row === incoming ? 'fixture_target' : 'fixture_owner'));
+    }
+    // An outgoing message can quote a link to the recipient.
+    outgoing.insertAdjacentHTML('beforeend',
+      '<a href="/fixture_target/" aria-label="Open the profile page of fixture_target">Quoted profile</a>');
+    const list = outgoing.parentElement;
+    let wrapper = w.document.createElement('div');
+    wrapper.append(...list.childNodes);
+    for (let depth = 0; depth < 5; depth++) {
+      const outer = w.document.createElement('div');
+      outer.append(wrapper);
+      wrapper = outer;
+    }
+    list.append(wrapper);
+  }
   let elapsed = 0;
   w.Date.now = () => elapsed;
   w.setTimeout = (fn, ms) => { elapsed += ms; return setImmediate(fn); };
@@ -544,6 +570,13 @@ test('the worker confirms only the Instagram Unsend button, leaves incoming mess
   assert.deepEqual(await runDmWorker(restricted, t, 'restricted'), {cancelClicks: 0, incomingClicks: 0, confirmations: 0});
   assert.equal(restricted.local[dmQueueKey].count, 0);
   assert.match(restricted.local[dmQueueKey].status, /kısıtlama/);
+});
+
+test('nested message layouts identify the sender from controls and do not mistake quoted recipient links for incoming messages', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'nested-layout')).confirmations, 1);
+  assert.equal(env.local[dmQueueKey].count, 1);
+  assert.equal(env.local[dmQueueKey].status, 'Mesaj işlemi tamamlandı.');
 });
 
 test('checking a chat finds the live-style Unsend menu without activating it', async t => {

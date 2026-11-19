@@ -88,6 +88,20 @@ globalThis.FollowStudioMessages = (() => {
   function messageRows(scroller) {
     const tagged = [...scroller.querySelectorAll('[data-message-id], [role="row"]')];
     if (tagged.length) return tagged.filter(row => !row.parentElement.closest('[data-message-id], [role="row"]'));
+    const bubbles = [...scroller.querySelectorAll('[aria-roledescription="message"]')]
+      .filter(bubble => !bubble.parentElement.closest('[aria-roledescription="message"]'));
+    if (bubbles.length) {
+      return bubbles.map(bubble => {
+        let row = bubble;
+        // Instagram inserts variable wrapper depths and reaction siblings.
+        // Keep exactly one message in each row, including its action controls.
+        while (row.parentElement && row.parentElement !== scroller &&
+          row.parentElement.querySelectorAll('[aria-roledescription="message"]').length === 1) {
+          row = row.parentElement;
+        }
+        return row;
+      });
+    }
     // The supplied userscript identifies message rows beneath Instagram's message-list pagelet.
     const wrappers = [scroller, ...scroller.querySelectorAll(':scope > div, :scope > div > div, :scope > div > div > div')];
     const candidates = wrappers.map(wrapper => [...wrapper.children].filter(row =>
@@ -106,10 +120,21 @@ globalThis.FollowStudioMessages = (() => {
   function belongsToRecipient(row, username) {
     if (!username) return false;
     const labels = [...row.querySelectorAll('[aria-label]')].map(el => normalize(el.getAttribute('aria-label')));
-    return labels.includes('see more options for message from ' + username) ||
-      labels.includes('react to message from ' + username) ||
+    const senders = labels.filter(label => /^(see more options for message from |react to message from )/.test(label))
+      .map(label => label.replace(/^(see more options for message from |react to message from )/, ''));
+    if (senders.length) return senders.every(sender => sender === username);
+    return (
       [...row.querySelectorAll('a[href][aria-label]')].some(link => !link.closest('[aria-roledescription="message"]') &&
-        /^(open the profile page of |.+ profil sayfasını aç$)/i.test(link.getAttribute('aria-label')) && profilePath(link) === username);
+        /^(open the profile page of |.+ profil sayfasını aç$)/i.test(link.getAttribute('aria-label')) && profilePath(link) === username));
+  }
+
+  function sentByCurrentAccount(row, username) {
+    const senders = [...row.querySelectorAll('[aria-label]')]
+      .map(el => normalize(el.getAttribute('aria-label')))
+      .filter(label => label.startsWith('see more options for message from '))
+      .map(label => label.slice('see more options for message from '.length));
+    if (username && senders.length) return senders.every(sender => sender !== username);
+    return outgoingRow(row) && !belongsToRecipient(row, username);
   }
 
   function reactionBadge(row) {
@@ -397,6 +422,11 @@ globalThis.FollowStudioMessages = (() => {
         return messageRows(scroller).length ||
           /^(no messages yet|henüz mesaj yok)[.!]?$/i.test(normalize(root.textContent));
       }, expected, 45000, 'list');
+      // Instagram restores the last reading position, which may be in the
+      // middle of the conversation. Always begin with the newest messages.
+      scroller.scrollTop = getComputedStyle(scroller).flexDirection === 'column-reverse' ?
+        0 : Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      await delay(1400);
       let stableTop = 0;
       let stalledTop = 0;
       let skipped = 0;
@@ -405,7 +435,7 @@ globalThis.FollowStudioMessages = (() => {
       const attempted = new WeakMap();
       const checkedReactions = new WeakMap();
       const eligible = item => withinViewport(item, scroller) && (
-        (options.messages && outgoingRow(item) && !belongsToRecipient(item, username) && attempted.get(item) !== item.textContent) ||
+        (options.messages && sentByCurrentAccount(item, username) && attempted.get(item) !== item.textContent) ||
         (options.reactions && belongsToRecipient(item, username) && checkedReactions.get(item) !== item.textContent && reactionBadge(item)));
       while (true) {
         await check();
@@ -468,7 +498,7 @@ globalThis.FollowStudioMessages = (() => {
         const oldestRow = [...messageRows(scroller)].sort((a, b) =>
           a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
         const oldestText = oldestRow?.textContent;
-        const step = Math.max(100, Math.floor(scroller.clientHeight * 0.75));
+        const step = Math.max(1, Math.floor(scroller.clientHeight * 0.5));
         scroller.scrollTop = Math.max(oldest, before - step);
         await delay(1400);
         requireThread(expected);
