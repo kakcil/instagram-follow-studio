@@ -184,7 +184,7 @@ test('panel uses Instagram page language for all tools, archive details and queu
       assert.match(panel.querySelector('#studio-view-unfollow').textContent, /Start processes the ZIP candidates in the current list/);
       panel.querySelector('#studio-tab-relationships').click();
       await new Promise(resolve => setImmediate(resolve));
-      assert.match(panel.querySelector('#studio-view-relationships').textContent, /Upload Instagram JSON archives to compare followers and following/);
+      assert.match(panel.querySelector('#studio-view-relationships').textContent, /Upload two Instagram JSON archives to see who stopped following you/);
     }
   }
 });
@@ -1343,6 +1343,7 @@ test('archive snapshots compare dated follower and mutual losses', async () => {
   assert.equal(alice.name, 'alice');
   assert.equal(alice.type, 'lost_follower');
   assert.equal(alice.wasMutual, true);
+  assert.equal(alice.stillFollowing, false);
   assert.equal(bob.name, 'bob');
   assert.equal(bob.type, 'mutual_ended');
   assert.equal(alice.from, initial);
@@ -1381,12 +1382,13 @@ test('relationship recording fails without replacing a valid baseline if storage
   assert.deepEqual(env.local[relationshipsKey], original);
 });
 
-test('relationship history tab shows comparison intervals and keeps other tools hidden', async t => {
+test('relationship history shows losses for the selected archive pair even when gains cancel the net loss', async t => {
   const env = environment();
   const initial = Date.now() - 1000;
-  await relationshipArchive(env, ['alice', 'bob'], ['alice', 'bob'], initial);
-  await relationshipArchive(env, ['bob'], [], initial + 1);
-  const {dom, panel} = await app(env);
+  await relationshipArchive(env, ['alice', 'bob', 'dana'], ['alice', 'bob', 'dana'], initial);
+  await relationshipArchive(env, ['bob', 'carol', 'dana'], ['dana'], initial + 1);
+  await relationshipArchive(env, ['bob', 'carol'], [], initial + 2);
+  const {dom, panel} = await app(env, undefined, 1, 'en');
   t.after(() => dom.window.close());
   panel.querySelector('[data-open]').click();
   panel.querySelector('#studio-tab-relationships').click();
@@ -1395,12 +1397,19 @@ test('relationship history tab shows comparison intervals and keeps other tools 
   assert.equal(view.hidden, false);
   assert.equal(panel.querySelector('#studio-view-follow').hidden, true);
   assert.equal(panel.querySelector('#studio-view-unfollow').hidden, true);
-  assert.equal(view.querySelector('[data-relationship-import] button').textContent, 'Arşivi kaydet ve karşılaştır');
   assert.equal(view.querySelector('[data-relationship-import]').closest('details'), null);
-  assert.match(view.querySelector('[data-relationship-events]').textContent, /alice/);
-  assert.match(view.querySelector('[data-relationship-events]').textContent, /Önceki kontrol/);
-  assert.match(view.querySelector('[data-relationship-events]').textContent, /Değişimin görüldüğü kontrol/);
-  assert.equal(view.querySelector('[data-relationship-scans]').children.length, 2);
+  const periods = view.querySelector('[data-relationship-period]');
+  assert.equal(periods.options.length, 2);
+  assert.equal(periods.value, String(initial + 2));
+  const events = view.querySelector('[data-relationship-events]');
+  const counts = view.querySelector('[data-relationship-counts]');
+  assert.deepEqual([...events.querySelectorAll('a')].map(link => link.textContent), ['@dana']);
+  assert.match(counts.textContent, /3 → 2 .*Lost: 1 · Gained: 0/);
+  periods.value = String(initial + 1);
+  periods.dispatchEvent(new dom.window.Event('change'));
+  assert.deepEqual([...events.querySelectorAll('a')].map(link => link.textContent), ['@alice']);
+  assert.match(events.textContent, /missing from both lists/);
+  assert.match(counts.textContent, /3 → 3 \(0 net\) · Lost: 1 · Gained: 1/);
 });
 
 test('relationship username is detected when the profile loads after content script initialization', async t => {

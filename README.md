@@ -15,7 +15,7 @@
   <a href="#need-help">Need help?</a>
 </p>
 
-Follow Studio **v4.2.4** includes a follow queue, an archive-based unfollow list, relationship history, and a tool to unsend your messages in one Instagram conversation.
+Follow Studio **v4.2.5** includes a follow queue, an archive-based unfollow list, relationship history, and a tool to unsend your messages in one Instagram conversation.
 
 **For desktop Chrome and Brave.** The extension follows Instagram’s Turkish or English interface language. You do not need Violentmonkey for the browser extension.
 
@@ -172,7 +172,7 @@ Your list is saved on this computer. You can reopen the panel later without choo
 
 Open **Takipleşme** and upload an all-time Instagram JSON ZIP containing both complete lists. Enter your Instagram username and the archive's preparation date, confirm it belongs to your account, then click **Arşivi kaydet ve karşılaştır**. Later archives must have a newer date. This import is separate from the unfollow list.
 
-The first snapshot establishes a baseline; it cannot reconstruct earlier changes. Subsequent snapshots record names missing from the followers or following list. Filter with **Tüm değişiklikler** (all changes), **Takipçi listenden çıkanlar** (lost followers), or **Biten takipleşmeler** (ended mutual follows). Expand **Kontrol tarihleri** to review snapshot dates.
+The first archive establishes a baseline. After the next upload, **Takipçi listenden çıkanlar** (lost followers) shows who appeared in the earlier follower list and is missing from the later one, including accounts that disappeared from your following list too. The summary shows both follower totals, the net change, and separate counts of losses and gains. Choose **Karşılaştırılan arşivler** (archives compared) to see an earlier pair of consecutive archives. **Tüm değişiklikler** (all changes) and **Biten takipleşmeler** (ended mutual follows) show the other changes in the selected period.
 
 Dates describe the interval **between two snapshots**, not the exact time or reason a relationship changed. Blocking, account closure, and incomplete source data can affect what appears in a list.
 

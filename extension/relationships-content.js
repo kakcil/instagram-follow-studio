@@ -63,7 +63,7 @@ globalThis.FollowStudioRelationships = (() => {
   function createView(panel, readArchive) {
     const view = document.createElement('section');
     view.innerHTML = `
-      <p class="manual-hint">Takipçi ve takip edilen listelerini karşılaştırmak için Instagram JSON arşivlerini yükle.</p>
+      <p class="manual-hint">Takipçi listenden kimlerin çıktığını görmek için iki Instagram JSON arşivi yükle.</p>
       <p class="manual-hint">Instagram arşivini JSON biçiminde, tüm zamanlar seçili ve takipçiler ile takip edilenler dahil olacak şekilde indir. Hazırlanma tarihi kaydın tarihi olarak kullanılır.</p>
       <form data-relationship-import>
         <label>Instagram kullanıcı adın <input name="username" type="text" autocomplete="off" spellcheck="false" placeholder="@kullanici" required></label>
@@ -75,8 +75,11 @@ globalThis.FollowStudioRelationships = (() => {
       </form>
       <p data-relationship-status role="status" class="manual-hint"></p>
       <p data-relationship-summary class="manual-hint"></p>
-      <select data-relationship-filter aria-label="Değişiklikleri filtrele"><option value="all">Tüm değişiklikler</option>
-        <option value="lost_follower">Takipçi listenden çıkanlar</option><option value="mutual">Biten takipleşmeler</option></select>
+      <label data-relationship-period-label hidden>Karşılaştırılan arşivler <select data-relationship-period></select></label>
+      <p data-relationship-counts class="manual-hint" aria-live="polite"></p>
+      <select data-relationship-filter aria-label="Değişiklikleri filtrele">
+        <option value="lost_follower">Takipçi listenden çıkanlar</option><option value="all">Tüm değişiklikler</option>
+        <option value="mutual">Biten takipleşmeler</option></select>
       <ul data-relationship-events aria-label="Takipleşme geçmişi"></ul>
       <button class="secondary" type="button" data-relationship-more hidden>Daha fazla göster</button>
       <details><summary>Kontrol tarihleri</summary><ul data-relationship-scans></ul></details>
@@ -102,11 +105,47 @@ globalThis.FollowStudioRelationships = (() => {
     let saved;
     let account;
     let visibleEvents = 200;
+    let comparisons = [];
     const isOpen = () => !view.hidden && !panel.querySelector('[data-veil]').hidden;
+
+    function renderPeriods() {
+      const scans = saved?.scans || [];
+      const byDate = new Map(scans.filter(scan => scan.source === 'archive').map(scan => [scan.at, scan]));
+      comparisons = scans.flatMap((scan, index) => {
+        if (scan.source !== 'archive') return [];
+        // Older versions stored consecutive snapshots without a baseline date.
+        const from = scan.from === undefined ? scans[index - 1]?.at : scan.from;
+        const before = byDate.get(from);
+        return before && before.at < scan.at ? [{before, after: scan}] : [];
+      }).sort((first, second) => second.after.at - first.after.at);
+      const picker = find('[data-relationship-period]');
+      const priorValue = picker.value;
+      const priorLatest = picker.options[0]?.value;
+      picker.replaceChildren(...comparisons.map(({before, after}) =>
+        new Option(date(before.at) + ' → ' + date(after.at), String(after.at))));
+      if (picker.options[0]?.value === priorLatest && comparisons.some(pair => String(pair.after.at) === priorValue)) {
+        picker.value = priorValue;
+      }
+      find('[data-relationship-period-label]').hidden = !comparisons.length;
+      find('[data-relationship-filter]').hidden = !comparisons.length;
+    }
+
     function renderEvents() {
-      const filter = find('select').value;
-      const events = (saved?.events || []).filter(event => filter === 'all' ||
+      const filter = find('[data-relationship-filter]').value;
+      const comparison = comparisons.find(pair => String(pair.after.at) === find('[data-relationship-period]').value);
+      const changes = comparison ? (saved?.events || []).filter(event =>
+        event.from === comparison.before.at && event.to === comparison.after.at) : [];
+      const events = changes.filter(event => filter === 'all' ||
         (filter === 'mutual' ? event.wasMutual : event.type === filter));
+      const counts = find('[data-relationship-counts]');
+      if (comparison) {
+        const {before, after} = comparison;
+        const lost = changes.filter(event => event.type === 'lost_follower').length;
+        const change = after.followers - before.followers;
+        const signed = new Intl.NumberFormat(locale(), {signDisplay: 'exceptZero'}).format(change);
+        counts.textContent = localize('Takipçi sayısı: ' + before.followers + ' → ' + after.followers +
+          ' (' + signed + ' net) · Listeden çıkan: ' + lost + ' · Listeye eklenen: ' + (change + lost));
+      } else counts.textContent = '';
       const rows = events.slice(0, visibleEvents).map(event => {
         const row = document.createElement('li');
         const link = document.createElement('a');
@@ -114,7 +153,8 @@ globalThis.FollowStudioRelationships = (() => {
         link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = '@' + event.name;
         const text = document.createElement('small');
         text.textContent = localize(event.type === 'lost_follower' ?
-          (event.wasMutual ? 'Takipleşiyordunuz. Artık takipçi listende görünmüyor.' : 'Artık takipçi listende görünmüyor.') :
+          (event.wasMutual && event.stillFollowing === false ? 'Daha önce takipleşiyordunuz. Artık iki listede de görünmüyor.' :
+            event.wasMutual ? 'Takipleşiyordunuz. Artık takipçi listende görünmüyor.' : 'Artık takipçi listende görünmüyor.') :
           'Takipleşiyordunuz. Artık takip ettiklerin listesinde görünmüyor.');
         const interval = document.createElement('small');
         interval.textContent = localize('Önceki kontrol ' + date(event.from) + ' · Değişimin görüldüğü kontrol ' + date(event.to));
@@ -122,7 +162,8 @@ globalThis.FollowStudioRelationships = (() => {
       });
       if (!rows.length) {
         const empty = document.createElement('li');
-        empty.textContent = localize(saved ? 'Bu filtrede kaydedilmiş değişiklik yok.' : 'İlk kaydını oluştur. Bir sonraki kontrol değişiklikleri gösterecek.');
+        empty.textContent = localize(!comparison ? 'Karşılaştırma için farklı tarihlerden iki JSON arşivi yükle.' :
+          filter === 'lost_follower' ? 'Bu iki arşiv arasında takipçi listenden çıkan hesap yok.' : 'Bu filtrede kaydedilmiş değişiklik yok.');
         rows.push(empty);
       }
       find('[data-relationship-events]').replaceChildren(...rows);
@@ -141,6 +182,7 @@ globalThis.FollowStudioRelationships = (() => {
         find('[data-relationship-summary]').textContent = saved ?
           localize((saved.latest.source === 'archive' ? 'Arşiv tarihi ' : 'Son kayıt ') + date(saved.latest.at)) +
           ' · ' + localize(saved.latest.followers + ' takipçi · ' + saved.latest.following + ' takip edilen') : '';
+        renderPeriods();
         renderEvents();
         find('[data-relationship-scans]').replaceChildren(...(saved?.scans || []).slice().sort((a,b) => b.at - a.at).map(scan => {
           const row = document.createElement('li');
@@ -189,7 +231,9 @@ globalThis.FollowStudioRelationships = (() => {
         await refresh();
       }
     };
-    find('select').onchange = () => { visibleEvents = 200; renderEvents(); };
+    for (const picker of view.querySelectorAll('select')) {
+      picker.onchange = () => { visibleEvents = 200; renderEvents(); };
+    }
     find('[data-relationship-more]').onclick = () => { visibleEvents += 200; renderEvents(); };
     for (const target of [view, panel.querySelector('[data-veil]')]) {
       target.addEventListener(target === view ? 'studio-view-change' : 'studio-visibility', () => {

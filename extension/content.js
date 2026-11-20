@@ -108,7 +108,7 @@
   <button class="launcher" data-open>✦ Follow Studio</button>
   <div class="veil" data-veil hidden>
     <section class="dialog" role="region" aria-labelledby="studio-title" tabindex="-1">
-      <header><h1 id="studio-title">Follow Studio <small data-studio-version style="font-size:12px;font-weight:400;color:#aaa">v4.2.4</small></h1><button class="close" data-close aria-label="Paneli kapat">×</button></header>
+      <header><h1 id="studio-title">Follow Studio <small data-studio-version style="font-size:12px;font-weight:400;color:#aaa">v4.2.5</small></h1><button class="close" data-close aria-label="Paneli kapat">×</button></header>
       <div class="body">
         <div class="stats"><div class="stat"><small data-stat-label="first">TAKİPÇİ</small><strong data-followers>—</strong></div><div class="stat"><small data-stat-label="second">TAKİP EDİLEN</small><strong data-following>—</strong></div><div class="stat"><small data-stat-label="third">İŞLEM LİSTESİ</small><strong data-count>0</strong></div></div>
         <p class="note" data-run-note hidden></p>

@@ -30,7 +30,8 @@ function relationshipChanges(previous, current) {
   const lostMutualOnly = previous.followers.filter(name => previousFollowing.has(name) &&
     followers.has(name) && !following.has(name));
   return [
-    ...lostFollowers.map(name => ({name, type: 'lost_follower', wasMutual: previousFollowing.has(name)})),
+    ...lostFollowers.map(name => ({name, type: 'lost_follower', wasMutual: previousFollowing.has(name),
+      stillFollowing: following.has(name)})),
     ...lostMutualOnly.map(name => ({name, type: 'mutual_ended', wasMutual: true}))
   ].map(event => ({...event, from: previous.at, to: current.at}));
 }
@@ -47,7 +48,7 @@ async function saveRelationshipSnapshot(data, saved, account, username, snapshot
   const changes = relationshipChanges(baseline, snapshot);
   const record = {account, username, latest: snapshot, photos,
     scans: [...(saved?.scans || []), {at: snapshot.at, followers: snapshot.followers.length,
-      following: snapshot.following.length, changes: changes.length, source: snapshot.source}],
+      following: snapshot.following.length, changes: changes.length, source: snapshot.source, from: baseline?.at ?? null}],
     events: [...changes, ...(saved?.events || [])]};
   data.accounts = [...data.accounts.filter(item => !sameFollowAccount(item.account, account)), record];
   await chrome.storage.local.set({[relationshipsKey]: data});
