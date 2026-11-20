@@ -74,6 +74,7 @@ globalThis.FollowStudioI18n = (() => {
     "Sohbet tarandı. Gönderdiğin bir mesaj bulunamadı.": "Scanned the chat. No message sent by you was found.",
     "Çalışma penceresini göster": "Show work window",
     "En eski mesaj doğrulanamadı. Tarama tamamlanmadı; çalışma penceresi açık bırakıldı.": "Could not verify the oldest messages. The scan is incomplete and the work window is still open.",
+    "Sınırdaki mesaj görünür alana getirilemedi. Tarama tamamlanmadı; çalışma penceresi açık bırakıldı.": "Could not bring a clipped message into view. The scan is incomplete and the work window is still open.",
     "Mesaj işlemi durdu: Instagram mesaj listesini yüklemedi.": "Instagram did not load the message list. The message job stopped.",
     "Mesaj işlemi durdu: Instagram’da açık bir pencere mesaj menüsünü engelliyor.": "An open Instagram dialog blocked the message menu. The message job stopped.",
     "Sohbet doğrulandı ve eski mesajlara doğru kaydırıldı.": "Chat verified and scrolled toward older messages.",

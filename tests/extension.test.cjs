@@ -435,6 +435,22 @@ async function runDmWorker(env, t, variant) {
   let reactionRemovals = 0;
   w.document.querySelector('#incoming button').onclick = () => incomingClicks++;
   const more = outgoing.querySelector('button');
+  if (variant === 'clipped-message' || variant === 'clipped-message-stuck') {
+    const list = outgoing.parentElement;
+    list.style.cssText = 'overflow-y:scroll;display:flex;flex-direction:column-reverse';
+    let top = 0;
+    Object.defineProperties(list, {
+      clientHeight: {get: () => 100},
+      scrollHeight: {get: () => 500},
+      scrollTop: {get: () => top, set: value => {
+        if (variant !== 'clipped-message-stuck') top = Math.max(-400, Math.min(0, value));
+      }}
+    });
+    const clipped = () => ({top: -25 - top, bottom: 5 - top, height: 30, width: 100, x: 0, y: -25 - top});
+    outgoing.getBoundingClientRect = clipped;
+    more.getBoundingClientRect = clipped;
+    more.getClientRects = () => top <= -38 ? [{}] : [];
+  }
   let upwardMoves = 0;
   if (['reverse-scroll', 'delayed-edge', 'stalled-edge', 'blank-viewport'].includes(variant)) {
     const list = w.document.querySelector('[data-pagelet="IGDMessagesList"]');
@@ -708,6 +724,21 @@ test('a scroll that cannot reach the oldest edge keeps the work window open and 
   const job = env.local[dmQueueKey];
   assert.equal(job.running, false);
   assert.match(job.status, /Tarama tamamlanmadı/);
+  assert.ok(env.tabs.has(job.reviewTabId));
+});
+
+test('a message clipped at the upper edge is centered and processed before advancing the scan', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'clipped-message')).confirmations, 1);
+  assert.equal(env.local[dmQueueKey].count, 1);
+  assert.equal(env.local[dmQueueKey].status, 'Mesaj işlemi tamamlandı.');
+});
+
+test('a clipped message that cannot be brought into view is not skipped as if processed', async t => {
+  const env = environment();
+  assert.equal((await runDmWorker(env, t, 'clipped-message-stuck')).confirmations, 0);
+  const job = env.local[dmQueueKey];
+  assert.match(job.status, /Sınırdaki mesaj görünür alana getirilemedi/);
   assert.ok(env.tabs.has(job.reviewTabId));
 });
 

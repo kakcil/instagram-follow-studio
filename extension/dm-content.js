@@ -152,12 +152,14 @@ globalThis.FollowStudioMessages = (() => {
     close.click();
   }
 
-  async function removeReaction(row, expected, check, id, preview) {
+  async function removeReaction(row, scroller, expected, check, id, preview) {
     await waitFor(() => !visiblePopovers().length, expected, 5000, 'overlay');
     const badge = reactionBadge(row);
     if (!badge) return false;
+    if (!await revealForAction(badge, scroller, expected)) return false;
     await check();
     if (!row.contains(badge) || !usable(badge)) return false;
+    if (!actionFits(badge, scroller)) stop('message_edge');
     badge.click();
     const dialog = await waitFor(reactionDialog, expected, 7000, 'reaction');
     const own = labeledControl(dialog, reactionRemovalLabels);
@@ -180,7 +182,9 @@ globalThis.FollowStudioMessages = (() => {
     if (!row.isConnected) stop('uncertain');
     const remainingBadge = reactionBadge(row);
     if (remainingBadge) {
+      if (!await revealForAction(remainingBadge, scroller, expected)) stop('uncertain');
       await check();
+      if (!row.contains(remainingBadge) || !actionFits(remainingBadge, scroller)) stop('uncertain');
       remainingBadge.click();
       const review = await waitFor(reactionDialog, expected, 7000, 'uncertain');
       if (labeledControl(review, reactionRemovalLabels)) stop('uncertain');
@@ -196,6 +200,43 @@ globalThis.FollowStudioMessages = (() => {
     const bounds = row.getBoundingClientRect();
     const viewport = scroller.getBoundingClientRect();
     return bounds.height > 0 && bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+  }
+
+  function actionViewport(scroller) {
+    const bounds = scroller.getBoundingClientRect();
+    const top = Math.max(0, bounds.top);
+    const bottom = Math.min(innerHeight, bounds.bottom);
+    const inset = Math.min(12, Math.max(0, (bottom - top) / 4));
+    return {top: top + inset, bottom: bottom - inset};
+  }
+
+  function actionFits(element, scroller) {
+    if (!visible(element)) return false;
+    const bounds = element.getBoundingClientRect();
+    const viewport = actionViewport(scroller);
+    const overlap = Math.min(bounds.bottom, viewport.bottom) - Math.max(bounds.top, viewport.top);
+    return bounds.height > 0 && overlap >= Math.min(bounds.height, (viewport.bottom - viewport.top) / 2, 28) - 1 &&
+      overlap > 0;
+  }
+
+  async function revealForAction(element, scroller, expected, recenter = false) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!scroller.contains(element)) return false;
+      if (actionFits(element, scroller) && !recenter) return true;
+      const bounds = element.getBoundingClientRect();
+      const viewport = actionViewport(scroller);
+      const delta = (bounds.top + bounds.bottom - viewport.top - viewport.bottom) / 2;
+      // Moving toward older messages takes a negative scroll delta in both
+      // ordinary and column-reverse lists.
+      const before = scroller.scrollTop;
+      if (Math.abs(delta) >= 2) scroller.scrollTop = before + delta;
+      await delay(300);
+      requireThread(expected);
+      recenter = false;
+    }
+    if (!scroller.contains(element)) return false;
+    if (!actionFits(element, scroller)) stop('message_edge');
+    return true;
   }
 
   function historyPosition(scroller) {
@@ -225,11 +266,15 @@ globalThis.FollowStudioMessages = (() => {
     });
   }
 
-  function hoverRow(row) {
+  function hoverRow(row, scroller) {
     const targets = [row, ...row.querySelectorAll('[role="group"], [role="none"], [role="presentation"]')];
+    const viewport = actionViewport(scroller);
     for (const target of targets) {
       const bounds = target.getBoundingClientRect();
-      const position = {bubbles: true, clientX: bounds.x + bounds.width / 2, clientY: bounds.y + bounds.height / 2};
+      const top = Math.max(bounds.top, viewport.top);
+      const bottom = Math.min(bounds.bottom, viewport.bottom);
+      if (bottom <= top) continue;
+      const position = {bubbles: true, clientX: bounds.x + bounds.width / 2, clientY: (top + bottom) / 2};
       if (typeof PointerEvent === 'function') {
         target.dispatchEvent(new PointerEvent('pointerenter', {...position, bubbles: false, pointerType: 'mouse'}));
         target.dispatchEvent(new PointerEvent('pointerover', {...position, pointerType: 'mouse'}));
@@ -374,16 +419,19 @@ globalThis.FollowStudioMessages = (() => {
     await waitFor(() => !visiblePopovers().length, expected, 2500, 'menu');
   }
 
-  async function unsendRow(row, expected, check, id, preview) {
+  async function unsendRow(row, scroller, expected, check, id, preview, recenter = false) {
     await waitFor(() => !visiblePopovers().length, expected, 5000, 'overlay');
-    hoverRow(row);
+    if (!await revealForAction(row, scroller, expected, recenter)) return false;
+    hoverRow(row, scroller);
     const more = await waitFor(() => moreButton(row), expected, 5000, 'menu');
+    if (!await revealForAction(more, scroller, expected)) return false;
     await check();
     requireThread(expected);
     if (!row.contains(more) || !usable(more)) stop('menu');
+    if (!actionFits(more, scroller)) stop('message_edge');
     const {surface, item} = await openActions(more, expected);
     if (!row.isConnected || !usable(item) || !surface.contains(item)) stop('menu');
-    if (preview) return;
+    if (preview) return true;
     await send('dm-commit', {id, operation: 'message'});
     requireThread(expected);
     if (!row.isConnected || !usable(item) || visiblePopovers().length !== 1 || !visible(surface) ||
@@ -408,6 +456,7 @@ globalThis.FollowStudioMessages = (() => {
     requireThread(expected);
     if (row.isConnected || visiblePopovers().length) stop('uncertain');
     await send('dm-removed', {id});
+    return true;
   }
 
   async function work(id, expected, preview = false, username, options = {messages: true}) {
@@ -453,7 +502,7 @@ globalThis.FollowStudioMessages = (() => {
         if (row) {
           if (options.reactions && belongsToRecipient(row, username)) {
             checkedReactions.set(row, row.textContent);
-            const verified = await removeReaction(row, expected, check, id, preview);
+            const verified = await removeReaction(row, scroller, expected, check, id, preview);
             checkedReactions.set(row, row.textContent);
             if (preview && verified) {
               await send('dm-finish', {id, reactionVerified: true});
@@ -465,8 +514,8 @@ globalThis.FollowStudioMessages = (() => {
             continue;
           }
           try {
-            await unsendRow(row, expected, check, id, preview);
-            if (preview) {
+            const verified = await unsendRow(row, scroller, expected, check, id, preview);
+            if (preview && verified) {
               await send('dm-finish', {id, menuVerified: true});
               return;
             }
@@ -476,8 +525,8 @@ globalThis.FollowStudioMessages = (() => {
             await delay(1000);
             if (row.isConnected) {
               try {
-                await unsendRow(row, expected, check, id, preview);
-                if (preview) {
+                const verified = await unsendRow(row, scroller, expected, check, id, preview, true);
+                if (preview && verified) {
                   await send('dm-finish', {id, menuVerified: true});
                   return;
                 }

@@ -101,6 +101,7 @@ const dmStopReasons = {
   popup: 'Mesaj işlemi durdu: küçük sohbet penceresinden tam sohbete geçilemedi.',
   search: 'Mesaj işlemi durdu: Mesajlar aramasında kullanıcı adına ait tek bir sohbet bulunamadı.',
   history: 'En eski mesaj doğrulanamadı. Tarama tamamlanmadı; çalışma penceresi açık bırakıldı.',
+  message_edge: 'Sınırdaki mesaj görünür alana getirilemedi. Tarama tamamlanmadı; çalışma penceresi açık bırakıldı.',
   list: 'Mesaj işlemi durdu: Instagram mesaj listesini yüklemedi.',
   overlay: 'Mesaj işlemi durdu: Instagram’da açık bir pencere mesaj menüsünü engelliyor.',
   reaction: 'Mesaj işlemi durdu: Instagram tepki listesi doğrulanamadı.',
@@ -262,7 +263,7 @@ async function handleDm(message, sender, unfollowSession) {
         const skipped = Number.isSafeInteger(message.skipped) && message.skipped > 0 ? message.skipped : 0;
         const status = job.pending ? dmStopReasons.uncertain : error ? dmStopReasons[message.reason] :
           skipped ? skipped + ' mesaj geri alınamadı. Diğer mesajların taraması tamamlandı.' : 'Mesaj işlemi tamamlandı.';
-        const keepTab = message.reason === 'history' || (!job.preview && Boolean(error || skipped));
+        const keepTab = ['history', 'message_edge'].includes(message.reason) || (!job.preview && Boolean(error || skipped));
         await finishDmQueue(job, status, {keepTab});
       }
       return {};
